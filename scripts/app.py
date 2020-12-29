@@ -12,8 +12,15 @@ def main():
     intrest = int(input("Choose a valid number : "))
     epNum = int(input("Enter episode Num : "))
     link = anime.getLink(animeNames[intrest], animeLinks[intrest], epNum)
-    downloadVideo(animeNames[intrest], epNum, link)
+    mode = input("Want to stream or download? (s/d) :")
+    if mode == 's':
+        streamVideo(animeNames[intrest], epNum, link)
+    elif mode == 'd':
+        downloadVideo(animeNames[intrest], epNum, link)
+    else:
+        print("Invalid choice!!")
 
 
 if __name__ == "__main__":
     main()
+    print("End Program")
