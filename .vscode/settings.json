@@ -1,3 +1,3 @@
 {
-    "python.pythonPath": "myvenv/bin/python"
+    "python.pythonPath": "venv/bin/python"
 }
