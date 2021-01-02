@@ -8,8 +8,8 @@ Python command line application to watch and download animes from popular anime 
 
 ## Functionality 🤖
 
-1. Downloads the video well
-2. Play the video without downloading but opencv doesn't support audio yet
+1. ⬇️ Downloads the video with good quality
+2. ⏯ Play the video without downloading but opencv doesn't support audio yet
 
 ## Main Dependencies 🧰
 
@@ -23,8 +23,7 @@ opencv
 
 ```sh
 $ pip install -r requirements.txt
-$ cd scripts
-$ python3 app.py
+$ python3 scripts/app.py
 ```
 
 Then follow the prompts and enjoy your anime

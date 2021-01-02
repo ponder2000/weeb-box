@@ -77,6 +77,19 @@ class GogoAnime:
             print(
                 f"Received unexpected status code {response.status_code} while getting download link")
 
+    # max number of available episodes still not working
+    def getMaxEpisode(self, animeLink: str):
+        r = requests.get(self.baseUrl + animeLink)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, features="html.parser")
+            tags = soup.find_all('li')
+            raise NotImplementedError
+            pass
+            return "-1"
+        else:
+            print(
+                f"Received unexpected status code {response.status_code} while getting download-page link")
+
     def getLink(self, animeName, animeLink, episodeNum):
         episodeLink = self._getEpisodeLink(animeName, animeLink, episodeNum)
         downloadPage = self._getDownloadPageLink(episodeLink)
