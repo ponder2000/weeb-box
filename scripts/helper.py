@@ -1,7 +1,18 @@
 import os
+import details
+
+
+PINK_COLOR = '\033[95m'
+RED_COLOR = '\033[91m'
+GREEN_COLOR = '\033[92m'
+OKCYAN = '\033[96m'
+COLOR_END = '\033[0m'
 
 
 def getDownlaodPath():
+    if details.downloadPath != None:
+        return details.downloadPath
+
     dirName = "Downloads"
     downloadPath = os.path.join(os.getcwd(), dirName)
     try:
@@ -13,12 +24,6 @@ def getDownlaodPath():
 
 
 def printf(msg: str, col: str):
-    PINK_COLOR = '\033[95m'
-    RED_COLOR = '\033[91m'
-    GREEN_COLOR = '\033[92m'
-    OKCYAN = '\033[96m'
-    COLOR_END = '\033[0m'
-
     if col == 'red':
         print(f"{RED_COLOR}{msg}{COLOR_END}")
     elif col == 'pink':
