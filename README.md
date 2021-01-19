@@ -54,7 +54,7 @@ Then follow the prompts and enjoy your animes
 
 ### 2. Results
 
-Downloaded Jujutsu Kisame with the app
+Downloaded Jujutsu Kaisen with the app
 ![](assets/output.png)
 
 ## 🤔 Why use command line instead of website?
