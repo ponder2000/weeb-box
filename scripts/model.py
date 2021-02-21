@@ -6,7 +6,7 @@ import os
 class GogoAnime:
     def __init__(self):
         self.websiteName = "gogoanime"
-        self.baseUrl = "https://gogoanime.so/"
+        self.baseUrl = "https://gogoanime.sh/"
 
     # helper function for search
     def _search(self, link: str):
