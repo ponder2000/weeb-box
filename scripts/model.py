@@ -57,7 +57,7 @@ class GogoAnime:
             return "-1"
         else:
             print(
-                f"Received unexpected status code {response.status_code} while getting download-page link")
+                f"Received unexpected status code {r.status_code} while getting download-page link")
 
     # get the link for the downlaod of the anime
     def _getDownloadableLink(self, linkToDownloadPage):
@@ -75,7 +75,7 @@ class GogoAnime:
             return "-1"
         else:
             print(
-                f"Received unexpected status code {response.status_code} while getting download link")
+                f"Received unexpected status code {r.status_code} while getting download link")
 
     # max number of available episodes still not working
     def getMaxEpisode(self, animeLink: str):
@@ -88,7 +88,7 @@ class GogoAnime:
             return "-1"
         else:
             print(
-                f"Received unexpected status code {response.status_code} while getting download-page link")
+                f"Received unexpected status code {r.status_code} while getting download-page link")
 
     def getLink(self, animeName, animeLink, episodeNum):
         episodeLink = self._getEpisodeLink(animeName, animeLink, episodeNum)
