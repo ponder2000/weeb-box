@@ -1,0 +1,32 @@
+# IBM Carbon dark — append to alacritty.toml
+[colors.primary]
+background = "#161616"
+foreground = "#f4f4f4"
+
+[colors.cursor]
+text = "#161616"
+cursor = "#78a9ff"
+
+[colors.selection]
+text = "#f4f4f4"
+background = "#393939"
+
+[colors.normal]
+black = "#161616"
+red = "#fa4d56"
+green = "#42be65"
+yellow = "#f1c21b"
+blue = "#4589ff"
+magenta = "#be95ff"
+cyan = "#33b1ff"
+white = "#f4f4f4"
+
+[colors.bright]
+black = "#525252"
+red = "#ff8389"
+green = "#6fdc8c"
+yellow = "#f1c21b"
+blue = "#78a9ff"
+magenta = "#d4bbff"
+cyan = "#82cfff"
+white = "#ffffff"
