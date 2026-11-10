@@ -104,6 +104,12 @@ CREATE TABLE IF NOT EXISTS settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS anime_meta (
+	key        TEXT PRIMARY KEY,
+	payload    TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL
+);
 `
 
 func DefaultPath() (string, error) {
