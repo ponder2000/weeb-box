@@ -18,6 +18,7 @@ import (
 const (
 	DefaultAniListURL = "https://graphql.anilist.co"
 	DefaultJikanURL   = "https://api.jikan.moe/v4"
+	DefaultKitsuURL   = "https://kitsu.io/api/edge"
 	userAgent         = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
 	maxBody           = 5 << 20
 	maxTags           = 8
@@ -44,16 +45,22 @@ type Info struct {
 }
 
 type Client struct {
-	HTTP       *http.Client
-	AniListURL string
-	JikanURL   string
+	HTTP         *http.Client
+	AniListURL   string
+	JikanURL     string
+	KitsuURL     string
+	JikanTimeout time.Duration
+	KitsuTimeout time.Duration
 }
 
 func New() *Client {
 	return &Client{
-		HTTP:       &http.Client{Timeout: 20 * time.Second},
-		AniListURL: DefaultAniListURL,
-		JikanURL:   DefaultJikanURL,
+		HTTP:         &http.Client{Timeout: 20 * time.Second},
+		AniListURL:   DefaultAniListURL,
+		JikanURL:     DefaultJikanURL,
+		KitsuURL:     DefaultKitsuURL,
+		JikanTimeout: 1500 * time.Millisecond,
+		KitsuTimeout: 1500 * time.Millisecond,
 	}
 }
 
@@ -153,8 +160,14 @@ func (c *Client) Lookup(ctx context.Context, title string) (Info, error) {
 	if info.Title == "" {
 		return Info{}, fmt.Errorf("metadata: no AniList entry for %q", title)
 	}
-	rating, adult, err := c.jikanRating(ctx, title)
-	if err != nil || rating == "" {
+	rating, adult := "", false
+	if c.KitsuURL != "" {
+		rating, adult, _ = c.kitsuRating(ctx, title)
+	}
+	if rating == "" {
+		rating, adult, _ = c.jikanRating(ctx, title)
+	}
+	if rating == "" {
 		info.Rating = fallbackRating(info.Adult)
 	} else {
 		info.Adult = info.Adult || adult
@@ -198,10 +211,71 @@ func isAdultRating(rating string) bool {
 	return strings.HasPrefix(rating, "R+") || strings.HasPrefix(rating, "Rx")
 }
 
+// kitsuRating returns Kitsu's age rating. Kitsu exposes PG/R/R18 codes and
+// guide text, and is generally faster than Jikan.
+func (c *Client) kitsuRating(ctx context.Context, title string) (string, bool, error) {
+	endpoint := strings.TrimRight(c.KitsuURL, "/") + "/anime?filter[text]=" + url.QueryEscape(title) + "&page[limit]=1"
+	timeout := c.KitsuTimeout
+	if timeout <= 0 {
+		timeout = 1500 * time.Millisecond
+	}
+	kctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(kctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", false, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := c.client().Do(req)
+	if err != nil {
+		return "", false, fmt.Errorf("metadata: kitsu: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false, fmt.Errorf("metadata: kitsu: %s", status(resp))
+	}
+	var body struct {
+		Data []struct {
+			Attributes struct {
+				AgeRating      string `json:"ageRating"`
+				AgeRatingGuide string `json:"ageRatingGuide"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&body); err != nil {
+		return "", false, fmt.Errorf("metadata: kitsu: %w", err)
+	}
+	if len(body.Data) == 0 {
+		return "", false, nil
+	}
+	code := strings.ToUpper(strings.TrimSpace(body.Data[0].Attributes.AgeRating))
+	switch code {
+	case "G":
+		return "G", false, nil
+	case "PG":
+		return "PG-13", false, nil
+	case "R":
+		return "R", false, nil
+	case "R18", "R+":
+		return "18+", true, nil
+	case "":
+		return "", false, nil
+	default:
+		return code, code == "RX" || code == "R18", nil
+	}
+}
+
 // jikanRating returns Jikan's age rating code ("PG-13", "R", "R+", "Rx").
 func (c *Client) jikanRating(ctx context.Context, title string) (string, bool, error) {
 	endpoint := strings.TrimRight(c.JikanURL, "/") + "/anime?q=" + url.QueryEscape(title) + "&limit=1"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	timeout := c.JikanTimeout
+	if timeout <= 0 {
+		timeout = 1500 * time.Millisecond
+	}
+	jctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(jctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", false, err
 	}

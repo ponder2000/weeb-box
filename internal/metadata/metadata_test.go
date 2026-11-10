@@ -20,7 +20,7 @@ func newTestClient(t *testing.T, anilist, jikan http.HandlerFunc) *Client {
 		anilist(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{HTTP: srv.Client(), AniListURL: srv.URL, JikanURL: srv.URL}
+	return &Client{HTTP: srv.Client(), AniListURL: srv.URL, JikanURL: srv.URL, KitsuURL: ""}
 }
 
 func writeJSON(w http.ResponseWriter, body string) {
@@ -108,6 +108,36 @@ func TestLookup(t *testing.T) {
 	}
 	if info.Description != "A boy with psychic powers." {
 		t.Fatalf("description = %q", info.Description)
+	}
+}
+
+func TestLookupKitsuRating(t *testing.T) {
+	var jikanCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/anime":
+			jikanCalls++
+			writeJSON(w, `{"data":[]}`)
+		case "/kitsu/anime":
+			if r.URL.Query().Get("filter[text]") != "Frieren" {
+				t.Errorf("kitsu query = %s", r.URL.RawQuery)
+			}
+			writeJSON(w, `{"data":[{"attributes":{"ageRating":"PG","ageRatingGuide":"Teens 13 or Older"}}]}`)
+		default:
+			writeJSON(w, lookupMedia)
+		}
+	}))
+	defer srv.Close()
+	client := &Client{HTTP: srv.Client(), AniListURL: srv.URL, JikanURL: srv.URL + "/jikan", KitsuURL: srv.URL + "/kitsu"}
+	info, err := client.Lookup(context.Background(), "Frieren")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Rating != "PG-13" || info.Adult {
+		t.Fatalf("rating = %q adult = %v", info.Rating, info.Adult)
+	}
+	if jikanCalls != 0 {
+		t.Fatalf("jikan should not be called when Kitsu has a rating (%d)", jikanCalls)
 	}
 }
 

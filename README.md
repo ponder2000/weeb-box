@@ -44,7 +44,7 @@ the same status and commands. Press `r` to recheck after installing, or
 
 ## Keys
 
-Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+o` opens Settings.
+Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+b` browses genres; `ctrl+o` opens Settings.
 
 | screen  | keys |
 | ------- | ---- |
@@ -55,6 +55,7 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 | downloads | `x` cancel, `r` retry last failed episode, `o` open folder, `esc` back |
 | library | `↑`/`↓` move, `enter` play the local file, `o` open folder, `r` rescan, `esc` home |
 | providers | `space`/`enter` enable or disable, `r` refresh status, `esc` back |
+| browse | `↑`/`↓` genre or title, `enter` drill in/search providers, `esc` back |
 | settings | `↑`/`↓` row, `space`/`←`/`→` cycle quality or theme, `enter` edit download dir, `esc` back |
 | setup | `r` recheck dependencies, `enter`/`esc` continue |
 
@@ -109,6 +110,23 @@ The MegaPlay resolver (data-id → encrypted sources → HLS + WebVTT) is shared
 `-base` overrides the gogoanime host only; the other providers use their defaults.
 
 KissAnime.tv.in was evaluated but is not wired yet: its search is an AJAX/CSRF endpoint and its player path needs a dedicated adapter.
+
+## Metadata, covers, and categories
+
+The TUI enriches a selected title with public metadata:
+
+- **AniList** — cover, genres, tags, adult flag, score, description
+- **Kitsu** — age rating (`G`, `PG-13`, `R`, `18+`), with **Jikan** as fallback
+- **SQLite cache** — seven-day TTL, so lookups do not repeat on every selection
+
+At **100+ columns**, the Results/Browse screens show a right-hand preview with a
+cover rendered as colored half-blocks; low-color terminals fall back to ASCII.
+Narrower terminals keep the compact rating/genres line, and the episode detail
+pane shows rating, genres, and tags.
+
+`ctrl+b` opens **Browse by genre**. Pick a genre, then a title, and the normal
+multi-provider search runs for that title. AniList browse is non-adult;
+search results are not filtered by rating.
 
 ## Settings
 
