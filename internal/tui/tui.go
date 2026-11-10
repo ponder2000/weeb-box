@@ -46,6 +46,7 @@ const (
 	settingsDatabase
 	settingsProviders
 	settingsTheme
+	settingsFont
 	settingsRowCount
 )
 
@@ -244,6 +245,7 @@ type Model struct {
 	scroll          *scrollState
 
 	quality     string
+	theme       string
 	settingsRow int
 	dirInput    textinput.Model
 	dirEditing  bool
@@ -276,13 +278,7 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 	search.Focus()
 
 	scroll := &scrollState{}
-	delegate := marqueeDelegate{DefaultDelegate: list.NewDefaultDelegate(), state: scroll}
-	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Foreground(colorText)
-	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(colorMuted)
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(colorAccent).BorderLeftForeground(colorAccent)
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(colorAccent)
-	delegate.Styles.DimmedTitle = delegate.Styles.DimmedTitle.Foreground(colorMuted)
-	delegate.Styles.DimmedDesc = delegate.Styles.DimmedDesc.Foreground(colorFaint)
+	delegate := newThemedDelegate(scroll)
 	l := func() list.Model {
 		model := list.New(nil, delegate, 40, 8)
 		model.SetShowTitle(false)
@@ -320,6 +316,7 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 		providerState:  map[string]store.ProviderState{},
 		scroll:         scroll,
 		quality:        "auto",
+		theme:          "carbon-dark",
 		dirInput:       dirInput,
 		width:          80,
 		height:         24,
@@ -415,6 +412,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case settingsMsg:
 		if msg.quality != "" {
 			m.quality = msg.quality
+		}
+		if msg.theme != "" {
+			m.theme = msg.theme
+			applyTheme(msg.theme)
+			m.refreshTheme()
 		}
 		return m, nil
 
@@ -855,17 +857,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "end", "G", "pgdown":
 			m.settingsRow = settingsRowCount - 1
 		case " ", "left", "right":
-			if m.settingsRow == settingsQuality {
-				step := 1
-				if key == "left" {
-					step = -1
-				}
+			step := 1
+			if key == "left" {
+				step = -1
+			}
+			switch m.settingsRow {
+			case settingsQuality:
 				m.cycleQuality(step)
+			case settingsTheme:
+				m.cycleTheme(step)
 			}
 		case "enter":
 			switch m.settingsRow {
 			case settingsQuality:
 				m.cycleQuality(1)
+			case settingsTheme:
+				m.cycleTheme(1)
 			case settingsDir:
 				m.dirEditing = true
 				m.dirInput.SetValue(m.outDir)
@@ -1580,10 +1587,22 @@ func (m Model) footer() string {
 		}
 	}
 	sep := dimStyle.Render("  ·  ")
-	for len(items) > 1 && lipgloss.Width(strings.Join(items, sep)) > m.viewWidth() {
+	fixed := ""
+	if m.screen != screenSettings && m.screen != screenBusy {
+		fixed = hint("ctrl+o", "settings")
+	}
+	avail := m.viewWidth()
+	if fixed != "" {
+		avail -= lipgloss.Width(fixed) + lipgloss.Width(sep)
+	}
+	for len(items) > 1 && lipgloss.Width(strings.Join(items, sep)) > avail {
 		items = items[:len(items)-1]
 	}
-	return strings.Join(items, sep)
+	out := strings.Join(items, sep)
+	if fixed != "" {
+		out += sep + fixed
+	}
+	return out
 }
 
 func (m Model) creatorLink() string {
@@ -1873,7 +1892,8 @@ func (m Model) settingsView() string {
 		{"Download directory", dirValue, dirNote},
 		{"Database", dbPath, "-db requires restart"},
 		{"Providers", fmt.Sprintf("%d/%d enabled", enabled, len(m.providers)), "ctrl+p providers"},
-		{"Theme", "Carbon dark · IBM Plex Mono", "switching planned"},
+		{"Color theme", themeLabel(m.theme), "space / ← → cycle"},
+		{"Font", "terminal setting", "IBM Plex Mono recommended"},
 	}
 	labelWidth := 20
 	lines := make([]string, len(rows))
@@ -2251,6 +2271,7 @@ func providerStateCmd(st *store.Store) tea.Cmd {
 
 type settingsMsg struct {
 	quality string
+	theme   string
 	err     error
 }
 
@@ -2262,7 +2283,11 @@ func loadSettingsCmd(st *store.Store) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		quality, err := st.GetSetting(ctx, "quality", "auto")
-		return settingsMsg{quality: quality, err: err}
+		if err != nil {
+			return settingsMsg{err: err}
+		}
+		theme, err := st.GetSetting(ctx, "theme", "carbon-dark")
+		return settingsMsg{quality: quality, theme: theme, err: err}
 	}
 }
 
@@ -2547,16 +2572,50 @@ func safeName(name string) string {
 	return name
 }
 
+func newThemedDelegate(state *scrollState) marqueeDelegate {
+	d := marqueeDelegate{DefaultDelegate: list.NewDefaultDelegate(), state: state}
+	d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(colorText)
+	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(colorMuted)
+	d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(colorAccent).BorderLeftForeground(colorAccent)
+	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(colorAccent)
+	d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(colorMuted)
+	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(colorFaint)
+	return d
+}
+
+func (m *Model) refreshTheme() {
+	m.search.PromptStyle = lipgloss.NewStyle().Foreground(colorAccent)
+	m.search.TextStyle = lipgloss.NewStyle().Foreground(colorText)
+	m.search.PlaceholderStyle = lipgloss.NewStyle().Foreground(colorFaint)
+	m.spinner.Style = lipgloss.NewStyle().Foreground(colorAccent)
+	delegate := newThemedDelegate(m.scroll)
+	m.resume.SetDelegate(delegate)
+	m.recent.SetDelegate(delegate)
+	m.main.SetDelegate(delegate)
+}
+
+type themeSpec struct {
+	name, label                             string
+	accent, muted, faint, line, text, keyBg string
+	err, ok                                 string
+}
+
+var themeSpecs = []themeSpec{
+	{"carbon-dark", "Carbon Dark", "#78a9ff", "#8d8d8d", "#6f6f6f", "#393939", "#f4f4f4", "#262626", "#fa4d56", "#42be65"},
+	{"carbon-light", "Carbon Light", "#0043ce", "#525252", "#8d8d8d", "#e0e0e0", "#161616", "#e0e0e0", "#da1e28", "#198038"},
+	{"tokyo-night", "Tokyo Night", "#7aa2f7", "#565f89", "#414868", "#2a2e42", "#c0caf5", "#1f2335", "#f7768e", "#9ece6a"},
+	{"mono", "Mono", "#e6e6e6", "#8c8c8c", "#5c5c5c", "#3a3a3a", "#f2f2f2", "#2a2a2a", "#d0d0d0", "#d0d0d0"},
+}
+
 var (
-	// IBM Carbon dark. Keep these aligned with themes/.
-	colorAccent = lipgloss.AdaptiveColor{Light: "#0043ce", Dark: "#78a9ff"}
-	colorMuted  = lipgloss.AdaptiveColor{Light: "#525252", Dark: "#8d8d8d"}
-	colorFaint  = lipgloss.AdaptiveColor{Light: "#8d8d8d", Dark: "#6f6f6f"}
-	colorLine   = lipgloss.AdaptiveColor{Light: "#e0e0e0", Dark: "#393939"}
-	colorText   = lipgloss.AdaptiveColor{Light: "#161616", Dark: "#f4f4f4"}
-	colorKeyBg  = lipgloss.AdaptiveColor{Light: "#e0e0e0", Dark: "#262626"}
-	colorErr    = lipgloss.AdaptiveColor{Light: "#da1e28", Dark: "#fa4d56"}
-	colorOK     = lipgloss.AdaptiveColor{Light: "#198038", Dark: "#42be65"}
+	colorAccent lipgloss.TerminalColor = lipgloss.Color("#78a9ff")
+	colorMuted  lipgloss.TerminalColor = lipgloss.Color("#8d8d8d")
+	colorFaint  lipgloss.TerminalColor = lipgloss.Color("#6f6f6f")
+	colorLine   lipgloss.TerminalColor = lipgloss.Color("#393939")
+	colorText   lipgloss.TerminalColor = lipgloss.Color("#f4f4f4")
+	colorKeyBg  lipgloss.TerminalColor = lipgloss.Color("#262626")
+	colorErr    lipgloss.TerminalColor = lipgloss.Color("#fa4d56")
+	colorOK     lipgloss.TerminalColor = lipgloss.Color("#42be65")
 
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	dimStyle   = lipgloss.NewStyle().Foreground(colorMuted)
@@ -2564,3 +2623,52 @@ var (
 	errStyle   = lipgloss.NewStyle().Foreground(colorErr)
 	okStyle    = lipgloss.NewStyle().Foreground(colorOK)
 )
+
+func applyTheme(name string) {
+	spec := themeSpecs[0]
+	for _, candidate := range themeSpecs {
+		if candidate.name == name {
+			spec = candidate
+			break
+		}
+	}
+	colorAccent = lipgloss.Color(spec.accent)
+	colorMuted = lipgloss.Color(spec.muted)
+	colorFaint = lipgloss.Color(spec.faint)
+	colorLine = lipgloss.Color(spec.line)
+	colorText = lipgloss.Color(spec.text)
+	colorKeyBg = lipgloss.Color(spec.keyBg)
+	colorErr = lipgloss.Color(spec.err)
+	colorOK = lipgloss.Color(spec.ok)
+	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	dimStyle = lipgloss.NewStyle().Foreground(colorMuted)
+	faintStyle = lipgloss.NewStyle().Foreground(colorFaint)
+	errStyle = lipgloss.NewStyle().Foreground(colorErr)
+	okStyle = lipgloss.NewStyle().Foreground(colorOK)
+}
+
+func themeLabel(name string) string {
+	for _, spec := range themeSpecs {
+		if spec.name == name {
+			return spec.label
+		}
+	}
+	return themeSpecs[0].label
+}
+
+func (m *Model) cycleTheme(step int) {
+	index := 0
+	for i, spec := range themeSpecs {
+		if spec.name == m.theme {
+			index = i
+			break
+		}
+	}
+	n := len(themeSpecs)
+	m.theme = themeSpecs[((index+step)%n+n)%n].name
+	applyTheme(m.theme)
+	m.refreshTheme()
+	if m.st != nil {
+		_ = m.st.SetSetting(context.Background(), "theme", m.theme)
+	}
+}

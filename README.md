@@ -55,7 +55,7 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 | downloads | `x` cancel, `r` retry last failed episode, `o` open folder, `esc` back |
 | library | `↑`/`↓` move, `enter` play the local file, `o` open folder, `r` rescan, `esc` home |
 | providers | `space`/`enter` enable or disable, `r` refresh status, `esc` back |
-| settings | `↑`/`↓` row, `space`/`←`/`→` cycle quality, `enter` edit download dir, `esc` back |
+| settings | `↑`/`↓` row, `space`/`←`/`→` cycle quality or theme, `enter` edit download dir, `esc` back |
 | setup | `r` recheck dependencies, `enter`/`esc` continue |
 
 Only one download job runs at a time; starting a queue stops at the first failure. `r` retries only the last failed episode, not a cancelled queue.
@@ -118,7 +118,7 @@ KissAnime.tv.in was evaluated but is not wired yet: its search is an AJAX/CSRF e
 - **Download directory** — editable and persisted. `-dir` overrides it for that run; existing files are not moved.
 - **Database** — shows the active SQLite path. Changing it requires restarting with `-db`.
 - **Providers** — enabled/total count; press `ctrl+p` to choose which sources search uses.
-- **Theme** — Carbon dark + IBM Plex Mono (theme switching is planned).
+- **Color theme** — Carbon Dark, Carbon Light, Tokyo Night, or Mono. This changes TUI colors; the font remains a terminal setting (IBM Plex Mono recommended).
 
 The selected quality applies to playback and downloads. The database and download paths are shown in the help screen too.
 

@@ -142,6 +142,38 @@ func TestScrollText(t *testing.T) {
 	}
 }
 
+func TestThemeCyclePersistAndApply(t *testing.T) {
+	t.Cleanup(func() { applyTheme("carbon-dark") })
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	m := New([]provider.Provider{stubProvider{}}, t.TempDir(), st)
+	if m.theme != "carbon-dark" {
+		t.Fatalf("default theme = %q", m.theme)
+	}
+	m.cycleTheme(1)
+	if m.theme != "carbon-light" {
+		t.Fatalf("cycled theme = %q", m.theme)
+	}
+	got, err := st.GetSetting(context.Background(), "theme", "")
+	if err != nil || got != "carbon-light" {
+		t.Fatalf("saved theme = %q err=%v", got, err)
+	}
+	updated, _ := m.Update(settingsMsg{theme: "tokyo-night"})
+	m = updated.(Model)
+	if m.theme != "tokyo-night" {
+		t.Fatalf("settingsMsg theme = %q", m.theme)
+	}
+	m.screen = screenSettings
+	m.settingsRow = settingsTheme
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
+	if got := updated.(Model); got.theme != "mono" {
+		t.Fatalf("space theme = %q", got.theme)
+	}
+}
+
 func TestProviderToggleFiltersSearch(t *testing.T) {
 	m := New([]provider.Provider{
 		fixedProvider{name: "alpha"},
