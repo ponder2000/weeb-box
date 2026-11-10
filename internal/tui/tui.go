@@ -74,7 +74,7 @@ const (
 // metaProvider is the metadata client surface the TUI needs; tests stub it.
 type metaProvider interface {
 	Lookup(ctx context.Context, title string) (metadata.Info, error)
-	Browse(ctx context.Context, genre string, page int) ([]metadata.Info, error)
+	Browse(ctx context.Context, genre string, page int, includeAdult bool) ([]metadata.Info, error)
 }
 
 // coverRenderer turns a cover URL into terminal art; tests stub it.
@@ -1312,9 +1312,16 @@ func (m Model) cycleScreen() (tea.Model, tea.Cmd) {
 
 // openGenres shows the AniList genre list that drives Browse.
 func (m Model) openGenres() (tea.Model, tea.Cmd) {
-	items := make([]list.Item, len(metadata.Genres))
-	for i, genre := range metadata.Genres {
-		items[i] = item{title: genre, desc: "popular · non-adult"}
+	genres := metadata.Genres
+	desc := "popular · non-adult"
+	if !m.hideAdult {
+		// Hentai is the only AniList genre kept behind the adult flag.
+		genres = append(append([]string{}, genres...), "Hentai")
+		desc = "popular · all ratings"
+	}
+	items := make([]list.Item, len(genres))
+	for i, genre := range genres {
+		items[i] = item{title: genre, desc: desc}
 	}
 	m.screen, m.err, m.status = screenGenres, nil, ""
 	m.browseLoad = false
@@ -1333,7 +1340,7 @@ func (m Model) startBrowse(genre string) (tea.Model, tea.Cmd) {
 	m.screen, m.err, m.status = screenBrowse, nil, ""
 	m.main.SetItems(nil)
 	m.layout()
-	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, genre, 1))
+	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, genre, 1, !m.hideAdult))
 }
 
 // browsePageBy moves the genre browse one page forward or back.
@@ -1347,7 +1354,7 @@ func (m Model) browsePageBy(step int) (tea.Model, tea.Cmd) {
 	}
 	m.browsePage, m.browseLoad = page, true
 	m.err, m.status = nil, fmt.Sprintf("Loading page %d…", page)
-	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, m.browseGenre, page))
+	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, m.browseGenre, page, !m.hideAdult))
 }
 
 // toggleHideAdult flips the adult filter and persists it.
@@ -3109,11 +3116,11 @@ func yesNo(value bool) string {
 	return "no"
 }
 
-func browseCmd(meta metaProvider, genre string, page int) tea.Cmd {
+func browseCmd(meta metaProvider, genre string, page int, includeAdult bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		items, err := meta.Browse(ctx, genre, page)
+		items, err := meta.Browse(ctx, genre, page, includeAdult)
 		return browseMsg{genre: genre, page: page, items: items, err: err}
 	}
 }

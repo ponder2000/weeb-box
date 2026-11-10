@@ -114,6 +114,7 @@ type fakeMeta struct {
 	browses int
 	genre   string
 	page    int
+	adult   bool
 }
 
 func (f *fakeMeta) Lookup(context.Context, string) (metadata.Info, error) {
@@ -121,9 +122,9 @@ func (f *fakeMeta) Lookup(context.Context, string) (metadata.Info, error) {
 	return f.info, f.err
 }
 
-func (f *fakeMeta) Browse(_ context.Context, genre string, page int) ([]metadata.Info, error) {
+func (f *fakeMeta) Browse(_ context.Context, genre string, page int, includeAdult bool) ([]metadata.Info, error) {
 	f.browses++
-	f.genre, f.page = genre, page
+	f.genre, f.page, f.adult = genre, page, includeAdult
 	return f.items, f.err
 }
 
@@ -831,7 +832,7 @@ func TestGenreNavigation(t *testing.T) {
 
 	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlB})
 	m = updated.(Model)
-	if m.screen != screenGenres || len(m.main.Items()) != len(metadata.Genres) {
+	if m.screen != screenGenres || len(m.main.Items()) != len(metadata.Genres)+1 {
 		t.Fatalf("screen=%v items=%d", m.screen, len(m.main.Items()))
 	}
 
@@ -857,6 +858,48 @@ func TestGenreNavigation(t *testing.T) {
 	if got := updated.(Model); got.screen != screenHome {
 		t.Fatalf("esc from genres = %v", got.screen)
 	}
+}
+
+func TestBrowseFollowsAdultSetting(t *testing.T) {
+	fm := &fakeMeta{items: []metadata.Info{{Title: "Frieren", Rating: "PG-13"}}}
+	m := New(nil, t.TempDir(), nil)
+	m.meta = fm
+	m.width, m.height = 120, 40
+
+	// Hide adult on: no Hentai entry, browse asks AniList for non-adult only.
+	m.hideAdult = true
+	updated, _ := m.openGenres()
+	m = updated.(Model)
+	if hasListItemTitle(m.main, "Hentai") {
+		t.Fatal("Hentai genre shown while hiding adult")
+	}
+	updated, cmd := m.startBrowse("Action")
+	m = runCmd(t, updated.(Model), cmd)
+	if fm.adult {
+		t.Fatal("browse requested adult titles while hiding adult")
+	}
+
+	// Hide adult off: Hentai appears and browse drops the filter.
+	m.hideAdult = false
+	updated, _ = m.openGenres()
+	m = updated.(Model)
+	if !hasListItemTitle(m.main, "Hentai") {
+		t.Fatal("Hentai genre missing when adult is allowed")
+	}
+	updated, cmd = m.startBrowse("Hentai")
+	m = runCmd(t, updated.(Model), cmd)
+	if !fm.adult {
+		t.Fatal("browse kept the adult filter off")
+	}
+}
+
+func hasListItemTitle(l list.Model, title string) bool {
+	for _, raw := range l.Items() {
+		if it, ok := raw.(item); ok && it.title == title {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBrowseTitleRunsSearch(t *testing.T) {
