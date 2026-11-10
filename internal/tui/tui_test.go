@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1736,5 +1737,124 @@ func TestPadLines(t *testing.T) {
 	}
 	if got := padLines("a\nb\nc", 2); got != "a\nb\nc" {
 		t.Fatalf("padLines shrank = %q", got)
+	}
+}
+
+var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func TestBrowseTokensAlign(t *testing.T) {
+	plain := func(info metadata.Info) string {
+		out, _ := renderTokens(browseTokens(info), 80, "  ", false)
+		return ansiSeq.ReplaceAllString(out, "")
+	}
+	a := plain(metadata.Info{Rating: "Not rated", Genres: []string{"Action", "Adventure"}, Score: 70})
+	b := plain(metadata.Info{Rating: "PG-13", Genres: []string{"Drama"}, Score: 85})
+	if got := strings.Index(a, "Action"); got != 12 {
+		t.Fatalf("first genre column at %d: %q", got, a)
+	}
+	if got := strings.Index(b, "Drama"); got != 12 {
+		t.Fatalf("second genre column at %d: %q", got, b)
+	}
+	if len(a) != len(b) {
+		t.Fatalf("row widths differ: %d vs %d (%q / %q)", len(a), len(b), a, b)
+	}
+	if !strings.HasSuffix(a, "★ 70") || !strings.HasSuffix(b, "★ 85") {
+		t.Fatalf("score column not right-aligned: %q / %q", a, b)
+	}
+}
+
+func TestTokenColumnTruncates(t *testing.T) {
+	out, used := renderTokens([]token{
+		{text: "PG-13", width: 10},
+		{text: "a very long genre list", width: 12},
+	}, 80, "  ", false)
+	plain := ansiSeq.ReplaceAllString(out, "")
+	if used != 24 {
+		t.Fatalf("used = %d, want 24", used)
+	}
+	if !strings.HasPrefix(plain, "PG-13       ") {
+		t.Fatalf("rating column = %q", plain)
+	}
+	if !strings.HasSuffix(plain, "…") {
+		t.Fatalf("genre column did not truncate: %q", plain)
+	}
+}
+
+func TestHomeRowsAlignColumns(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	updated, _ := m.Update(homeMsg{progress: []store.Progress{
+		{AnimeTitle: "A Silent Voice", EpisodeNumber: 1, Position: 13, Duration: 100, Episodes: 1},
+		{AnimeTitle: "I'm Dating a Dark Summoner", EpisodeNumber: 5, Position: 40, Duration: 100, Episodes: 5},
+	}})
+	m = updated.(Model)
+	m.layout()
+
+	plain := ansiSeq.ReplaceAllString(m.resume.View(), "")
+	var columns []int
+	for _, line := range strings.Split(plain, "\n") {
+		if i := strings.Index(line, "E00"); i >= 0 {
+			columns = append(columns, runewidth.StringWidth(line[:i]))
+		}
+	}
+	if len(columns) != 2 {
+		t.Fatalf("rendered %d resume rows: %q", len(columns), plain)
+	}
+	if columns[0] != columns[1] {
+		t.Fatalf("episode column misaligned: %v\n%s", columns, plain)
+	}
+	for _, want := range []string{"▰▱▱▱", "13%", "5 eps"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("home rows missing %q: %q", want, plain)
+		}
+	}
+}
+
+func TestHomeRowsShowFinishedAndAlignedRecent(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	updated, _ := m.Update(homeMsg{
+		progress: []store.Progress{{
+			AnimeTitle: "Frieren", EpisodeNumber: 5, Position: 0, Duration: 1400, Episodes: 5,
+		}},
+		recents: []store.Search{
+			{Query: "frieren", LastUsed: time.Now().Unix()},
+			{Query: "a much longer search query", LastUsed: time.Now().Add(-time.Hour).Unix()},
+		},
+	})
+	m = updated.(Model)
+	m.layout()
+
+	view := ansiSeq.ReplaceAllString(m.resume.View(), "")
+	if !strings.Contains(view, "done") || !strings.Contains(view, "▰▰▰▰") {
+		t.Errorf("finished row = %q", view)
+	}
+
+	recent := ansiSeq.ReplaceAllString(m.recent.View(), "")
+	var ends []int
+	for _, line := range strings.Split(recent, "\n") {
+		line = strings.TrimRight(line, " ")
+		if line == "" {
+			continue
+		}
+		ends = append(ends, runewidth.StringWidth(line))
+	}
+	if len(ends) != 2 || ends[0] != ends[1] {
+		t.Fatalf("recent time column misaligned: %v\n%s", ends, recent)
+	}
+}
+
+func TestHomeRowsNarrowKeepProgress(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 80, 24
+	updated, _ := m.Update(homeMsg{progress: []store.Progress{{
+		AnimeTitle: "I'm Dating a Dark Summoner", EpisodeNumber: 5, Position: 576, Duration: 1440, Episodes: 5,
+	}}})
+	m = updated.(Model)
+	m.layout()
+
+	plain := ansiSeq.ReplaceAllString(m.resume.View(), "")
+	if !strings.Contains(plain, "▰") || !strings.Contains(plain, "40%") {
+		t.Fatalf("narrow home row lost progress: %q", plain)
 	}
 }

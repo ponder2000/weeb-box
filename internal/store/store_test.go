@@ -122,3 +122,50 @@ func TestSearchProgressAndDownloads(t *testing.T) {
 		t.Fatalf("stats = %+v err=%v", stats, err)
 	}
 }
+
+func TestRecentProgressGroupsAnime(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	save := func(provider, episodeURL, animeURL, title string, episode int, position float64) {
+		t.Helper()
+		if err := st.SaveProgress(ctx, Progress{
+			Provider: provider, EpisodeURL: episodeURL,
+			AnimeURL: animeURL, AnimeTitle: title,
+			EpisodeNumber: episode, Position: position, Duration: 100,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for ep := 1; ep <= 3; ep++ {
+		save("gogoanime", "https://x/frieren-e"+string(rune('0'+ep)), "https://x/frieren", "Frieren", ep, float64(ep*10))
+	}
+	save("gogoanime", "https://x/other-e1", "https://x/other", "Other", 1, 5)
+	save("local", "/tmp/frieren-e1.mp4", "/tmp/frieren-e1.mp4", "Frieren", 1, 10)
+	save("local", "/tmp/frieren-e2.mp4", "/tmp/frieren-e2.mp4", "Frieren", 2, 20)
+
+	got, err := st.RecentProgress(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("groups = %d: %+v", len(got), got)
+	}
+	groups := map[string]Progress{}
+	for _, p := range got {
+		groups[p.Provider+"|"+p.AnimeTitle] = p
+	}
+	if g := groups["gogoanime|Frieren"]; g.Episodes != 3 || g.EpisodeNumber != 3 || g.Position != 30 {
+		t.Errorf("gogo group = %+v", g)
+	}
+	if g := groups["local|Frieren"]; g.Episodes != 2 || g.EpisodeNumber != 2 || g.EpisodeURL != "/tmp/frieren-e2.mp4" {
+		t.Errorf("local group = %+v", g)
+	}
+	if g := groups["gogoanime|Other"]; g.Episodes != 1 {
+		t.Errorf("other group = %+v", g)
+	}
+}

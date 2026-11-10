@@ -281,3 +281,42 @@ func decodePNGPayload(t *testing.T, payload string) {
 		t.Fatalf("payload is not PNG: %v", err)
 	}
 }
+
+func TestQuadrantGlyphs(t *testing.T) {
+	red := color.RGBA{255, 0, 0, 255}
+	blue := color.RGBA{0, 0, 255, 255}
+
+	split := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	split.Set(0, 0, red)
+	split.Set(1, 0, red)
+	split.Set(0, 1, blue)
+	split.Set(1, 1, blue)
+	out := renderQuadrants(split, 1, 1)
+	if !strings.Contains(out, "▀") || !strings.Contains(out, "\x1b[38;2;255;0;0m") || !strings.Contains(out, "\x1b[48;2;0;0;255m") {
+		t.Fatalf("top/bottom split = %q", out)
+	}
+
+	diagonal := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	diagonal.Set(0, 0, red)
+	diagonal.Set(1, 0, blue)
+	diagonal.Set(0, 1, blue)
+	diagonal.Set(1, 1, red)
+	out = renderQuadrants(diagonal, 1, 1)
+	if !strings.Contains(out, "▚") {
+		t.Fatalf("diagonal split = %q", out)
+	}
+
+	flat := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			flat.Set(x, y, color.RGBA{10, 20, 30, 255})
+		}
+	}
+	out = renderQuadrants(flat, 1, 1)
+	if strings.Contains(out, "\x1b[38;2;") {
+		t.Fatalf("flat block used a foreground: %q", out)
+	}
+	if !strings.Contains(out, "\x1b[48;2;10;20;30m ") {
+		t.Fatalf("flat block = %q", out)
+	}
+}

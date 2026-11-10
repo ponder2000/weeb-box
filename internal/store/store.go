@@ -33,6 +33,7 @@ type Progress struct {
 	Position      float64
 	Duration      float64
 	UpdatedAt     int64
+	Episodes      int // recorded episodes for the anime; RecentProgress only
 }
 
 type Download struct {
@@ -237,9 +238,21 @@ func (s *Store) Progress(ctx context.Context, provider, episodeURL string) (Prog
 }
 
 func (s *Store) RecentProgress(ctx context.Context, limit int) ([]Progress, error) {
+	// One row per anime: the latest watched episode plus how many episodes have
+	// progress. Local files are grouped by title because their anime URL is the
+	// file path.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT provider, episode_url, anime_url, anime_title, episode_number, position, duration, updated_at
-		FROM watch_progress ORDER BY updated_at DESC LIMIT ?`, limit)
+		WITH grouped AS (
+			SELECT provider, episode_url, anime_url, anime_title, episode_number, position, duration, updated_at,
+				COUNT(*) OVER (PARTITION BY provider, grp) AS episodes,
+				ROW_NUMBER() OVER (PARTITION BY provider, grp ORDER BY updated_at DESC, episode_number DESC) AS rn
+			FROM (
+				SELECT *, CASE WHEN provider = 'local' THEN anime_title ELSE anime_url END AS grp
+				FROM watch_progress
+			)
+		)
+		SELECT provider, episode_url, anime_url, anime_title, episode_number, position, duration, updated_at, episodes
+		FROM grouped WHERE rn = 1 ORDER BY updated_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +260,7 @@ func (s *Store) RecentProgress(ctx context.Context, limit int) ([]Progress, erro
 	var out []Progress
 	for rows.Next() {
 		var p Progress
-		if err := rows.Scan(&p.Provider, &p.EpisodeURL, &p.AnimeURL, &p.AnimeTitle, &p.EpisodeNumber, &p.Position, &p.Duration, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.Provider, &p.EpisodeURL, &p.AnimeURL, &p.AnimeTitle, &p.EpisodeNumber, &p.Position, &p.Duration, &p.UpdatedAt, &p.Episodes); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

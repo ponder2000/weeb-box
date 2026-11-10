@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
@@ -90,8 +91,9 @@ func detectTrueColor() bool {
 }
 
 // Render returns width x height terminal lines for the image at url. TrueColor
-// renders two pixel rows per line with half blocks; otherwise grayscale ASCII
-// is used. Results are cached per url, size and mode.
+// renders a 2x2 pixel block per cell with quadrant glyphs (four pixels per
+// cell); otherwise grayscale ASCII is used. Results are cached per url, size
+// and mode.
 func (r *Renderer) Render(ctx context.Context, url string, width, height int) (string, error) {
 	if width <= 0 || height <= 0 {
 		return "", fmt.Errorf("cover: invalid size %dx%d", width, height)
@@ -112,7 +114,7 @@ func (r *Renderer) Render(ctx context.Context, url string, width, height int) (s
 
 	var out string
 	if r.TrueColor {
-		out = renderBlocks(resize(img, width, height*2), width, height)
+		out = renderQuadrants(resize(img, width*2, height*2), width, height)
 	} else {
 		out = renderASCII(resize(img, width, height), width, height)
 	}
@@ -223,14 +225,27 @@ func resize(src image.Image, width, height int) *image.RGBA {
 	return dst
 }
 
-func renderBlocks(img *image.RGBA, width, height int) string {
+// quadRunes maps a 2x2 pixel mask (TL=1, TR=2, BL=4, BR=8) to a block glyph.
+var quadRunes = [16]rune{' ', '▘', '▝', '▀', '▖', '▌', '▞', '▛', '▗', '▚', '▐', '▜', '▄', '▙', '▟', '█'}
+
+// renderQuadrants draws four pixels per cell with two cluster colors, so the
+// same terminal area carries twice the horizontal detail of half blocks.
+func renderQuadrants(img *image.RGBA, width, height int) string {
 	var b strings.Builder
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			top := img.RGBAAt(x, y*2)
-			bottom := img.RGBAAt(x, y*2+1)
-			fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm▀",
-				top.R, top.G, top.B, bottom.R, bottom.G, bottom.B)
+			fg, bg, mask := quadColors([4]color.RGBA{
+				img.RGBAAt(x*2, y*2),
+				img.RGBAAt(x*2+1, y*2),
+				img.RGBAAt(x*2, y*2+1),
+				img.RGBAAt(x*2+1, y*2+1),
+			})
+			if mask == 0 {
+				fmt.Fprintf(&b, "\x1b[48;2;%d;%d;%dm ", bg.R, bg.G, bg.B)
+				continue
+			}
+			fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm%c",
+				fg.R, fg.G, fg.B, bg.R, bg.G, bg.B, quadRunes[mask])
 		}
 		b.WriteString("\x1b[0m")
 		if y < height-1 {
@@ -238,6 +253,67 @@ func renderBlocks(img *image.RGBA, width, height int) string {
 		}
 	}
 	return b.String()
+}
+
+// quadColors splits four pixels into two color clusters and reports the mask of
+// pixels closest to fg. Near-uniform blocks collapse to one background color.
+func quadColors(p [4]color.RGBA) (fg, bg color.RGBA, mask int) {
+	best, ai, bi := -1, 0, 0
+	for i := 0; i < 4; i++ {
+		for j := i + 1; j < 4; j++ {
+			if d := rgbDistance(p[i], p[j]); d > best {
+				best, ai, bi = d, i, j
+			}
+		}
+	}
+	if best < 24 {
+		m := meanColor(p)
+		return m, m, 0
+	}
+	a, c := p[ai], p[bi]
+	na, nc := 0, 0
+	for pass := 0; pass < 2; pass++ {
+		var sumA, sumC [3]int
+		mask, na, nc = 0, 0, 0
+		for i := 0; i < 4; i++ {
+			if rgbDistance(p[i], a) <= rgbDistance(p[i], c) {
+				mask |= 1 << i
+				sumA[0] += int(p[i].R)
+				sumA[1] += int(p[i].G)
+				sumA[2] += int(p[i].B)
+				na++
+			} else {
+				sumC[0] += int(p[i].R)
+				sumC[1] += int(p[i].G)
+				sumC[2] += int(p[i].B)
+				nc++
+			}
+		}
+		if na == 0 || nc == 0 {
+			m := meanColor(p)
+			return m, m, 0
+		}
+		a = color.RGBA{uint8(sumA[0] / na), uint8(sumA[1] / na), uint8(sumA[2] / na), 255}
+		c = color.RGBA{uint8(sumC[0] / nc), uint8(sumC[1] / nc), uint8(sumC[2] / nc), 255}
+	}
+	return a, c, mask
+}
+
+func rgbDistance(a, b color.RGBA) int {
+	dr := int(a.R) - int(b.R)
+	dg := int(a.G) - int(b.G)
+	db := int(a.B) - int(b.B)
+	return dr*dr + dg*dg + db*db
+}
+
+func meanColor(p [4]color.RGBA) color.RGBA {
+	var r, g, b int
+	for _, c := range p {
+		r += int(c.R)
+		g += int(c.G)
+		b += int(c.B)
+	}
+	return color.RGBA{uint8(r / 4), uint8(g / 4), uint8(b / 4), 255}
 }
 
 func renderASCII(img *image.RGBA, width, height int) string {

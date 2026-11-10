@@ -108,6 +108,7 @@ type item struct {
 	title     string
 	desc      string
 	tokens    []token
+	sep       string // column separator; empty means " · "
 	titleKind tokenKind
 	anime     provider.Anime
 	episode   provider.Episode
@@ -181,8 +182,10 @@ const (
 // token is one colored piece of a list row. Provider tokens carry the provider
 // name in text so its fixed color can be looked up during rendering.
 type token struct {
-	text string
-	kind tokenKind
+	text  string
+	kind  tokenKind
+	width int  // pad or truncate to this column width; 0 leaves the text alone
+	right bool // right-align the padded column
 }
 
 // providerHex keeps each source recognizable; the mono theme ignores these.
@@ -246,15 +249,27 @@ func (d marqueeDelegate) Render(w io.Writer, m list.Model, index int, data list.
 	avail := max(4, m.Width()-2)
 	tokens := itemTokens(it)
 	if d.Height() == 1 {
-		block, used := renderTokens(tokens, avail, "  ", emptyFilter)
-		titleWidth := avail - used
-		if used > 0 {
-			titleWidth -= 2
+		// Prefer all token columns; fall back to a half-width title and drop
+		// the trailing columns when the panel is narrow.
+		titleWidth := avail - tokensWidth(tokens, "  ") - 2
+		var block string
+		if titleWidth < 10 {
+			titleWidth = max(8, avail/2)
+			var used int
+			block, used = renderTokens(tokens, avail-titleWidth-2, "  ", emptyFilter)
+			switch {
+			case used == 0:
+				titleWidth = avail
+			case avail-used-2 > titleWidth:
+				titleWidth = avail - used - 2
+			}
+		} else {
+			block, _ = renderTokens(tokens, avail, "  ", emptyFilter)
 		}
-		if titleWidth < 8 {
-			block, titleWidth = "", avail
-		}
-		line := marker + titleStyle.Render(scrollText(it.title, offset, titleWidth))
+		// Home rows stay still so the columns never jump; long titles ellipsize.
+		title := runewidth.Truncate(it.title, titleWidth, "…")
+		title = runewidth.FillRight(title, titleWidth)
+		line := marker + titleStyle.Render(title)
 		if block != "" {
 			line += "  " + block
 		}
@@ -262,7 +277,11 @@ func (d marqueeDelegate) Render(w io.Writer, m list.Model, index int, data list.
 		return
 	}
 	title := marker + titleStyle.Render(scrollText(it.title, offset, avail))
-	block, _ := renderTokens(tokens, avail, " · ", emptyFilter)
+	sep := it.sep
+	if sep == "" {
+		sep = " · "
+	}
+	block, _ := renderTokens(tokens, avail, sep, emptyFilter)
 	fmt.Fprintf(w, "%s\n%s%s", title, "  ", block)
 }
 
@@ -314,12 +333,41 @@ func providerColor(name string) lipgloss.TerminalColor {
 
 // renderTokens joins as many tokens as fit, returning the styled string and its
 // plain width.
+// tokensWidth is the plain width of every token plus the separators.
+func tokensWidth(tokens []token, sep string) int {
+	width := 0
+	for i, t := range tokens {
+		if i > 0 {
+			width += runewidth.StringWidth(sep)
+		}
+		if t.width > 0 {
+			width += t.width
+		} else {
+			width += runewidth.StringWidth(t.text)
+		}
+	}
+	return width
+}
+
 func renderTokens(tokens []token, maxWidth int, sep string, dim bool) (string, int) {
 	var b strings.Builder
 	used, count := 0, 0
 	sepWidth := runewidth.StringWidth(sep)
 	for _, t := range tokens {
-		add := runewidth.StringWidth(t.text)
+		text := t.text
+		if t.width > 0 {
+			if runewidth.StringWidth(text) > t.width {
+				text = runewidth.Truncate(text, t.width, "…")
+			}
+			if pad := t.width - runewidth.StringWidth(text); pad > 0 {
+				if t.right {
+					text = strings.Repeat(" ", pad) + text
+				} else {
+					text += strings.Repeat(" ", pad)
+				}
+			}
+		}
+		add := runewidth.StringWidth(text)
 		if count > 0 {
 			add += sepWidth
 		}
@@ -333,7 +381,7 @@ func renderTokens(tokens []token, maxWidth int, sep string, dim bool) (string, i
 		if dim {
 			style = dimStyle
 		}
-		b.WriteString(style.Render(t.text))
+		b.WriteString(style.Render(text))
 		used += add
 		count++
 	}
@@ -369,6 +417,14 @@ func metaKind(part string) tokenKind {
 }
 
 // progressBlocks is the compact home progress bar.
+// episodeCount labels how many episodes of the anime have progress.
+func episodeCount(n int) string {
+	if n == 1 {
+		return "1 ep"
+	}
+	return fmt.Sprintf("%d eps", n)
+}
+
 func progressBlocks(ratio float64) string {
 	const width = 4
 	ratio = math.Max(0, math.Min(1, ratio))
@@ -676,13 +732,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stats = msg.stats
 		resume := make([]list.Item, len(msg.progress))
 		for i, p := range msg.progress {
+			// A finished episode is stored at position 0; show it as done and
+			// keep the row aligned with in-progress ones.
+			done := p.Duration > 0 && p.Position <= 0
+			bar, pct, kind := progressBlocks(progressRatio(p)), progressPct(p), tokAccent
+			if done {
+				bar, pct, kind = progressBlocks(1), "done", tokOK
+			}
 			resume[i] = item{
 				title: p.AnimeTitle,
 				desc:  fmt.Sprintf("E%03d · %s · %s / %s", p.EpisodeNumber, progressPct(p), clock(p.Position), clock(p.Duration)),
 				tokens: []token{
-					{text: progressBlocks(progressRatio(p)), kind: tokAccent},
-					{text: progressPct(p), kind: tokAccent},
-					{text: fmt.Sprintf("E%03d", p.EpisodeNumber), kind: tokMuted},
+					{text: bar, kind: kind, width: 4},
+					{text: pct, kind: kind, width: 4, right: true},
+					{text: fmt.Sprintf("E%03d", p.EpisodeNumber), kind: tokMuted, width: 4, right: true},
+					{text: episodeCount(p.Episodes), kind: tokMuted, width: 5, right: true},
 				},
 				progress: p,
 			}
@@ -692,7 +756,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			recent[i] = item{
 				title:  s.Query,
 				desc:   ago(s.LastUsed),
-				tokens: []token{{text: ago(s.LastUsed), kind: tokMuted}},
+				tokens: []token{{text: ago(s.LastUsed), kind: tokMuted, width: 8, right: true}},
 				query:  s.Query,
 			}
 		}
@@ -807,17 +871,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		items := make([]list.Item, len(msg.items))
 		for i, info := range msg.items {
 			m.metaCache[metadata.Key(info.Title)] = info
-			tokens := []token{{text: ratingBadge(info), kind: tokMuted}}
-			if info.Adult {
-				tokens[0].kind = tokErr
-			}
-			if len(info.Genres) > 0 {
-				tokens = append(tokens, token{text: strings.Join(info.Genres[:min(2, len(info.Genres))], ", "), kind: tokMuted})
-			}
-			if info.Score > 0 {
-				tokens = append(tokens, token{text: fmt.Sprintf("★ %.0f", info.Score), kind: tokWarn})
-			}
-			items[i] = item{title: info.Title, desc: browseDesc(info), tokens: tokens, info: info}
+			items[i] = item{title: info.Title, desc: browseDesc(info), tokens: browseTokens(info), sep: "  ", info: info}
 		}
 		m.main.SetItems(items)
 		m.main.Select(0)
@@ -1790,6 +1844,21 @@ func ratingBadge(info metadata.Info) string {
 		return "Not rated"
 	}
 	return info.Rating
+}
+
+// browseTokens lays rating, genres, and score into fixed columns so rows line
+// up like a table.
+func browseTokens(info metadata.Info) []token {
+	rating := token{text: ratingBadge(info), kind: tokMuted, width: 10}
+	if info.Adult {
+		rating.kind = tokErr
+	}
+	genres := token{text: strings.Join(info.Genres[:min(2, len(info.Genres))], ", "), kind: tokMuted, width: 26}
+	score := token{kind: tokWarn, width: 5, right: true}
+	if info.Score > 0 {
+		score.text = fmt.Sprintf("★ %.0f", info.Score)
+	}
+	return []token{rating, genres, score}
 }
 
 func browseDesc(info metadata.Info) string {

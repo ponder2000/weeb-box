@@ -67,9 +67,9 @@ For a modern control bar, install [uosc](https://github.com/tomasklaen/uosc) and
 
 Mouse: wheel scrolls the list under the pointer; click a row to select it, click it again (or double-click) to open/play. On the episode detail panel, clicking Play/Download/Download-from-here runs that action. Terminal text selection may need Shift or Option while mouse reporting is on.
 
-The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete. Long titles auto-scroll horizontally in resume/recent rows, search results, the library, and the download queue.
+The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete. Long titles auto-scroll horizontally in search results, the library, and the download queue; Home rows truncate with `…` so their columns stay aligned.
 
-Rows are color-coded: each provider has its own color, and type (`TV`, `ONA`, `Movie`…), audio (`Sub`/`Dub`), status (`Completed`/`Ongoing`/`Upcoming`), ratings, watch progress, `downloaded`, and `subs` badges use separate colors. The Mono theme collapses these to greys. `Continue watching` and `Recent searches` use one-line rows with a progress bar, so both panels show more items and grow with the window.
+Rows are color-coded: each provider has its own color, and type (`TV`, `ONA`, `Movie`…), audio (`Sub`/`Dub`), status (`Completed`/`Ongoing`/`Upcoming`), ratings, watch progress, `downloaded`, and `subs` badges use separate colors. The Mono theme collapses these to greys. `Continue watching` uses one line per anime with a fixed title column, progress bar, percentage, current episode, and the number of episodes with progress; the list is sorted by the most recently watched anime. `Recent searches` uses the same aligned layout with the time on the right. Both panels show more items and grow with the window.
 
 ## Storage
 
@@ -122,7 +122,7 @@ The TUI enriches a selected title with public metadata:
 - **SQLite cache** — seven-day TTL, so lookups do not repeat on every selection
 
 At **100+ columns**, the Results/Browse screens show a right-hand preview with a
-cover rendered as colored half-blocks; low-color terminals fall back to ASCII.
+cover rendered as colored quadrant blocks (four pixels per cell, so twice the horizontal detail of half blocks); low-color terminals fall back to ASCII.
 The preview sizes itself from the terminal (roughly 32–38 columns, 2:3 aspect,
 capped by the panel height) so the art stays readable. Narrower terminals keep
 the compact rating/genres line, and the episode detail pane shows rating,
@@ -130,12 +130,13 @@ genres, and tags.
 
 Press `i` on Results, Browse, or Episodes to open the selected title's cover.
 iTerm2 and Kitty draw it inline through their own image protocol; other
-terminals get a large half-block viewer (about 60% of the terminal, 2:3) with
+terminals get a large quadrant-block viewer (about 60% of the terminal, 2:3) with
 title, rating, genres, and tags (`esc`/`enter` back).
 
 `ctrl+b` opens **Browse by genre**. Pick a genre, then a title, and the normal
-multi-provider search runs for that title. `n`/`]` and `p`/`[` page through the
-popular list; an empty page reports "no more titles". Browse follows **Hide
+multi-provider search runs for that title. Browse rows are a small table:
+rating, genres, and score sit in fixed columns. `n`/`]` and `p`/`[` page through
+the popular list; an empty page reports "no more titles". Browse follows **Hide
 adult** in Settings: off (default) includes adult titles and the Hentai genre,
 on requests AniList's non-adult feed. The flag is AniList's explicit-adult mark,
 so uncensored/ecchi titles that are not rated `18+` can still appear.
