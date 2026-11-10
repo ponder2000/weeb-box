@@ -321,6 +321,10 @@ func TestViewFitsTerminal(t *testing.T) {
 	for _, size := range []struct{ w, h int }{{80, 24}, {120, 40}} {
 		m := New([]provider.Provider{stubProvider{}}, t.TempDir(), nil)
 		m.width, m.height = size.w, size.h
+		m.resume.SetItems([]list.Item{item{
+			title:  strings.Repeat("long ", 10),
+			tokens: []token{{text: "▰▰▱▱", kind: tokAccent}, {text: "99%", kind: tokAccent}, {text: "E999", kind: tokMuted}},
+		}})
 		m.recent.SetItems([]list.Item{item{title: "psyren", desc: "2m ago"}})
 		m.results = []searchResult{{provider: stubProvider{}, anime: provider.Anime{Title: strings.Repeat("long ", 20), Meta: "TV"}}}
 		m.episodes = []provider.Episode{{Number: 1, Title: strings.Repeat("long ", 20)}}
@@ -1132,5 +1136,167 @@ func TestNativeCoverDecision(t *testing.T) {
 	}
 	if !strings.Contains(string(staged), "\x1b]1337;") {
 		t.Fatalf("staged escape = %q", staged)
+	}
+}
+
+func TestProviderColorsAndMetaTokens(t *testing.T) {
+	t.Cleanup(func() { applyTheme("carbon-dark") })
+	seen := map[lipgloss.TerminalColor]string{}
+	for name := range providerHex {
+		color := providerColor(name)
+		if other, ok := seen[color]; ok {
+			t.Errorf("%s and %s share a color", name, other)
+		}
+		seen[color] = name
+	}
+	if got := providerColor("unknown"); got != colorMuted {
+		t.Errorf("unknown provider color = %v", got)
+	}
+
+	applyTheme("mono")
+	if got := providerColor("gogoanime"); got != colorMuted {
+		t.Errorf("mono provider color = %v, want muted", got)
+	}
+	if got := colorFor(tokOK); got != colorOK || got == colorMuted {
+		// mono maps ok to its own grey; ensure it is not a fixed color leak.
+		if got != lipgloss.Color("#d0d0d0") {
+			t.Errorf("mono ok color = %v", got)
+		}
+	}
+	applyTheme("carbon-dark")
+
+	for _, tc := range []struct {
+		part string
+		want tokenKind
+	}{
+		{"TV", tokText}, {"ONA", tokText}, {"OVA", tokText}, {"Movie", tokText}, {"Special", tokText},
+		{"Sub", tokOK}, {"Dub", tokWarn},
+		{"Completed", tokOK}, {"Ongoing", tokWarn}, {"Upcoming", tokMuted},
+		{"1999", tokMuted}, {"", tokMuted},
+	} {
+		if got := metaKind(tc.part); got != tc.want {
+			t.Errorf("metaKind(%q) = %v, want %v", tc.part, got, tc.want)
+		}
+	}
+
+	tokens := metaTokens("TV · Sub · Completed")
+	if len(tokens) != 3 || tokens[0].text != "TV" || tokens[1].kind != tokOK || tokens[2].kind != tokOK {
+		t.Fatalf("metaTokens = %#v", tokens)
+	}
+	if got := metaTokens(""); len(got) != 0 {
+		t.Errorf("empty meta = %#v", got)
+	}
+}
+
+func TestTokenRowRendering(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(0) // termenv.TrueColor, so ANSI codes are assertable
+	defer lipgloss.SetColorProfile(previous)
+
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 80, 24
+	m.results = []searchResult{{
+		provider: stubProvider{},
+		anime:    provider.Anime{Title: "Frieren", Meta: "TV · Sub · Completed"},
+	}}
+	m.main.SetItems(m.animeItems())
+	m.main.Select(0)
+	m.screen = screenResults
+	m.layout()
+
+	view := m.main.View()
+	for _, plain := range []string{"Frieren", "gogoanime", "TV", "Sub", "Completed"} {
+		if !strings.Contains(view, plain) {
+			t.Errorf("row is missing %q", plain)
+		}
+	}
+	// gogoanime is amber, Sub/Completed green.
+	for _, code := range []string{"\x1b[38;2;241;194;27m", "\x1b[38;2;65;190;101m"} {
+		if !strings.Contains(view, code) {
+			t.Errorf("row is missing ANSI color %q: %q", code, view)
+		}
+	}
+	a, b := strings.Index(view, "TV"), strings.Index(view, "Completed")
+	if a < 0 || b < 0 || a > b {
+		t.Errorf("meta tokens are out of order: %q", view)
+	}
+}
+
+func TestHomeRowsCompactRender(t *testing.T) {
+	if got := newCompactDelegate(nil).Height(); got != 1 {
+		t.Errorf("compact delegate height = %d", got)
+	}
+	if got := newThemedDelegate(nil).Height(); got != 2 {
+		t.Errorf("main delegate height = %d", got)
+	}
+	if got := newCompactDelegate(nil).Spacing(); got != 0 {
+		t.Errorf("compact delegate spacing = %d", got)
+	}
+
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	updated, _ := m.Update(homeMsg{progress: []store.Progress{{
+		AnimeTitle: "Frieren", EpisodeNumber: 5, Position: 50, Duration: 100,
+	}}})
+	m = updated.(Model)
+	m.layout()
+
+	row := m.resume.View()
+	for _, plain := range []string{"Frieren", "▰▰▱▱", "50%", "E005"} {
+		if !strings.Contains(row, plain) {
+			t.Errorf("home resume row is missing %q: %q", plain, row)
+		}
+	}
+	if got, want := lipgloss.Height(row), m.resume.Height(); got != want {
+		t.Errorf("home list height = %d, set %d", got, want)
+	}
+}
+
+func TestHomeClickUsesOneLineRows(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	items := make([]list.Item, 4)
+	for i := range items {
+		items[i] = item{title: string(rune('A' + i))}
+	}
+	m.resume.SetItems(items)
+	m.recent.SetItems(items)
+	m.layout()
+
+	panelsTop := 8 + 1 // homeView adds the tagline at >= 28 rows
+	half := (m.viewWidth() - 2) / 2
+	click := func(x, y int) Model {
+		updated, _ := m.handleMouse(tea.MouseMsg{
+			X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+		})
+		return updated.(Model)
+	}
+
+	got := click(m.leftMargin()+2, m.bodyOffset()+panelsTop+2+2)
+	if got.focus != focusResume || got.resume.Index() != 2 {
+		t.Fatalf("resume click: focus=%v index=%d", got.focus, got.resume.Index())
+	}
+
+	got = click(m.leftMargin()+half+4, m.bodyOffset()+panelsTop+2+3)
+	if got.focus != focusRecent || got.recent.Index() != 3 {
+		t.Fatalf("recent click: focus=%v index=%d", got.focus, got.recent.Index())
+	}
+}
+
+func TestHomeHeightGrowsWithTerminal(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 80, 24
+	m.layout()
+	small := m.resume.Height()
+
+	m.width, m.height = 120, 40
+	m.layout()
+	large := m.resume.Height()
+
+	if small < 1 || large <= small {
+		t.Fatalf("home rows: 80x24=%d 120x40=%d", small, large)
+	}
+	if large < 15 {
+		t.Errorf("120x40 home rows = %d, expected the panel to fill", large)
 	}
 }
