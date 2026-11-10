@@ -69,6 +69,8 @@ Mouse: wheel scrolls the list under the pointer; click a row to select it, click
 
 The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete. Long titles auto-scroll horizontally in resume/recent rows, search results, the library, and the download queue.
 
+Rows are color-coded: each provider has its own color, and type (`TV`, `ONA`, `Movie`…), audio (`Sub`/`Dub`), status (`Completed`/`Ongoing`/`Upcoming`), ratings, watch progress, `downloaded`, and `subs` badges use separate colors. The Mono theme collapses these to greys. `Continue watching` and `Recent searches` use one-line rows with a progress bar, so both panels show more items and grow with the window.
+
 ## Storage
 
 Videos:
