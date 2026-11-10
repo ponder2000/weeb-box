@@ -141,11 +141,40 @@ func DownloadSidecar(ctx context.Context, src provider.Stream, videoPath string)
 	return dest, nil
 }
 
-// Player is a running external player. Cleanup must be called after exit.
+// Player is an external player started without taking over the terminal.
+// Cleanup must be called after the player exits.
 type Player struct {
-	Cmd    *exec.Cmd
-	socket string
-	dir    string
+	Cmd     *exec.Cmd
+	socket  string
+	dir     string
+	started bool
+}
+
+// Start launches the player detached from the terminal; ctx cancels it.
+func (p *Player) Start(ctx context.Context) error {
+	if p == nil || p.Cmd == nil {
+		return errors.New("no player command")
+	}
+	if p.started {
+		return errors.New("player already started")
+	}
+	// CommandContext kills the player when ctx is done, so quitting the TUI
+	// closes the window too.
+	cmd := exec.CommandContext(ctx, p.Cmd.Path, p.Cmd.Args[1:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, io.Discard, io.Discard
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	p.Cmd, p.started = cmd, true
+	return nil
+}
+
+// Wait blocks until the player exits.
+func (p *Player) Wait() error {
+	if p == nil || !p.started {
+		return errors.New("player not started")
+	}
+	return p.Cmd.Wait()
 }
 
 func (p *Player) Cleanup() {
@@ -229,6 +258,8 @@ func playerDir() (dir, socket string, err error) {
 func mpvArgs(title string, start float64, referer, subFile, socket string) []string {
 	args := []string{
 		"--force-window=yes",
+		// The TUI owns the terminal; mpv only drives its own window.
+		"--terminal=no",
 		"--osd-level=1",
 		"--hwdec=auto-safe",
 		// Keep only a short forward window; HLS is fetched on demand.

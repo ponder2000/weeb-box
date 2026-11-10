@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/ponder2000/weeb-box/internal/cover"
 	"github.com/ponder2000/weeb-box/internal/deps"
 	lib "github.com/ponder2000/weeb-box/internal/library"
+	"github.com/ponder2000/weeb-box/internal/media"
 	"github.com/ponder2000/weeb-box/internal/metadata"
 	"github.com/ponder2000/weeb-box/internal/provider"
 	"github.com/ponder2000/weeb-box/internal/store"
@@ -1132,5 +1134,50 @@ func TestNativeCoverDecision(t *testing.T) {
 	}
 	if !strings.Contains(string(staged), "\x1b]1337;") {
 		t.Fatalf("staged escape = %q", staged)
+	}
+}
+
+// Covers the playback lifecycle without launching mpv: playback is detached,
+// so the episode screen stays visible and playbackDoneMsg restores it.
+func TestPlayWithKeepsTUIAndRestoresScreen(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.screen, m.playReturn = screenBusy, screenEpisodes
+	player := &media.Player{Cmd: exec.Command("sh", "-c", "exit 0")}
+
+	updated, cmd := m.playWith(player, playbackInfo{Provider: "local", EpisodeURL: "/tmp/e.mp4", AnimeTitle: "A"}, 0)
+	model := updated.(Model)
+	if cmd == nil {
+		t.Fatal("no wait command")
+	}
+	if model.screen != screenEpisodes {
+		t.Fatalf("screen while playing = %v", model.screen)
+	}
+	if model.playCancel == nil || model.player != player {
+		t.Fatal("playback state not tracked")
+	}
+	if !strings.Contains(model.status, "TUI stays") {
+		t.Errorf("status = %q", model.status)
+	}
+
+	// A second episode while one player is open must not start another.
+	second := &media.Player{Cmd: exec.Command("sh", "-c", "exit 0")}
+	if _, cmd := model.playWith(second, playbackInfo{EpisodeURL: "/tmp/other.mp4"}, 0); cmd != nil {
+		t.Fatal("started a second player")
+	}
+
+	msg, ok := cmd().(playbackDoneMsg)
+	if !ok {
+		t.Fatalf("wait returned %T", msg)
+	}
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	final, _ := model.Update(msg)
+	done := final.(Model)
+	if done.screen != screenEpisodes {
+		t.Errorf("screen after playback = %v", done.screen)
+	}
+	if done.player != nil || done.playCancel != nil {
+		t.Error("playback state not cleared")
 	}
 }

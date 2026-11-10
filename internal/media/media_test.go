@@ -127,6 +127,8 @@ func TestDefaultSubtitlePrefersEnglish(t *testing.T) {
 func TestMPVArgsLocal(t *testing.T) {
 	args := strings.Join(mpvArgs("Frieren — E001", 12, "", "/tmp/ep.vtt", "/tmp/mpv.sock"), " ")
 	for _, want := range []string{
+		"--terminal=no",
+		"--force-window=yes",
 		"--force-media-title=Frieren — E001",
 		"--sub-file=/tmp/ep.vtt",
 		"--start=12.000",
@@ -142,6 +144,42 @@ func TestMPVArgsLocal(t *testing.T) {
 func TestPlayLocalMissing(t *testing.T) {
 	if _, err := PlayLocal(filepath.Join(t.TempDir(), "missing.mp4"), "missing", 0); err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+// A Player launches without mpv so the start/wait lifecycle stays covered.
+func TestPlayerStartWait(t *testing.T) {
+	p := &Player{Cmd: exec.Command("sh", "-c", "exit 0")}
+	if err := p.Wait(); err == nil {
+		t.Fatal("Wait before Start should fail")
+	}
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Start(context.Background()); err == nil {
+		t.Fatal("second Start should fail")
+	}
+	if err := p.Wait(); err != nil {
+		t.Fatalf("Wait = %v", err)
+	}
+}
+
+func TestPlayerStartCancel(t *testing.T) {
+	p := &Player{Cmd: exec.Command("sh", "-c", "sleep 10")}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := p.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- p.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled player exited cleanly")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancel did not kill the player")
 	}
 }
 
