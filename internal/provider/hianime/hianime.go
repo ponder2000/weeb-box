@@ -45,6 +45,8 @@ func New(baseURL string) *Adapter {
 
 func (a *Adapter) Name() string { return "hianime" }
 
+func (a *Adapter) SiteURL() string { return a.BaseURL }
+
 func (a *Adapter) Search(ctx context.Context, query string) ([]provider.Anime, error) {
 	body, err := a.get(ctx, a.BaseURL+"/search?q="+url.QueryEscape(query))
 	if err != nil {

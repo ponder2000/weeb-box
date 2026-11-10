@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/ponder2000/weeb-box/internal/deps"
 	lib "github.com/ponder2000/weeb-box/internal/library"
 	"github.com/ponder2000/weeb-box/internal/media"
@@ -31,6 +33,7 @@ const (
 	screenEpisodes
 	screenDownloads
 	screenLibrary
+	screenProviders
 	screenSetup
 	screenBusy
 	screenHelp
@@ -66,6 +69,98 @@ type item struct {
 func (i item) Title() string       { return i.title }
 func (i item) Description() string { return i.desc }
 func (i item) FilterValue() string { return i.title }
+
+type providerItem struct {
+	name      string
+	url       string
+	enabled   bool
+	lastOK    int64
+	lastError string
+}
+
+func (p providerItem) Title() string {
+	mark := "●"
+	if !p.enabled {
+		mark = "○"
+	}
+	return mark + " " + p.name
+}
+
+func (p providerItem) Description() string {
+	state := "enabled"
+	if !p.enabled {
+		state = "disabled"
+	}
+	updated := "never"
+	if p.lastOK > 0 {
+		updated = ago(p.lastOK)
+	}
+	desc := p.url + " · " + state + " · updated " + updated
+	if p.lastError != "" {
+		desc += " · error: " + p.lastError
+	}
+	return desc
+}
+
+func (p providerItem) FilterValue() string { return p.name }
+
+type scrollState struct{ offset int }
+
+type scrollTickMsg struct{}
+
+func scrollTickCmd() tea.Cmd {
+	return tea.Tick(160*time.Millisecond, func(time.Time) tea.Msg { return scrollTickMsg{} })
+}
+
+type marqueeDelegate struct {
+	list.DefaultDelegate
+	state *scrollState
+}
+
+func (d marqueeDelegate) Render(w io.Writer, m list.Model, index int, data list.Item) {
+	item, ok := data.(list.DefaultItem)
+	if !ok {
+		d.DefaultDelegate.Render(w, m, index, data)
+		return
+	}
+	width := max(8, m.Width()-8)
+	d.DefaultDelegate.Render(w, m, index, marqueeItem{DefaultItem: item, state: d.state, width: width})
+}
+
+type marqueeItem struct {
+	list.DefaultItem
+	state *scrollState
+	width int
+}
+
+func (i marqueeItem) Title() string {
+	offset := 0
+	if i.state != nil {
+		offset = i.state.offset
+	}
+	return scrollText(i.DefaultItem.Title(), offset, i.width)
+}
+
+func (m Model) scrollOffset() int {
+	if m.scroll == nil {
+		return 0
+	}
+	return m.scroll.offset
+}
+
+func scrollText(text string, offset, width int) string {
+	if width < 4 || runewidth.StringWidth(text) <= width {
+		return text
+	}
+	const gap = "   "
+	runes := []rune(text + gap)
+	if len(runes) == 0 {
+		return text
+	}
+	at := offset % len(runes)
+	rotated := append(append([]rune{}, runes[at:]...), runes[:at]...)
+	return runewidth.Truncate(string(rotated), width, "")
+}
 
 type queueState int
 
@@ -125,8 +220,11 @@ type Model struct {
 	libraryLoading bool
 	localProgress  map[string]store.Progress
 
-	deps       deps.Report
-	setupShown bool
+	deps            deps.Report
+	setupShown      bool
+	providerState   map[string]store.ProviderState
+	providerLoading bool
+	scroll          *scrollState
 
 	player     *media.Player
 	playCancel context.CancelFunc
@@ -155,7 +253,8 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 	search.PlaceholderStyle = lipgloss.NewStyle().Foreground(colorFaint)
 	search.Focus()
 
-	delegate := list.NewDefaultDelegate()
+	scroll := &scrollState{}
+	delegate := marqueeDelegate{DefaultDelegate: list.NewDefaultDelegate(), state: scroll}
 	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Foreground(colorText)
 	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(colorMuted)
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(colorAccent).BorderLeftForeground(colorAccent)
@@ -191,6 +290,8 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 		spinner:        sp,
 		progressByURL:  map[string]store.Progress{},
 		downloadsByNum: map[int]store.Download{},
+		providerState:  map[string]store.ProviderState{},
+		scroll:         scroll,
 		width:          80,
 		height:         24,
 	}
@@ -222,6 +323,8 @@ func (m Model) Init() tea.Cmd {
 		textinput.Blink,
 		tea.SetWindowTitle("weeb-box — "+m.providerLabel()),
 		checkDepsCmd(),
+		providerStateCmd(m.st),
+		scrollTickCmd(),
 		loadHomeCmd(m.st, m.libraryDir),
 	)
 }
@@ -248,6 +351,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleKey(msg)
 
+	case scrollTickMsg:
+		if m.scroll != nil {
+			m.scroll.offset++
+		}
+		return m, scrollTickCmd()
+
 	case depsMsg:
 		m.deps = deps.Report(msg)
 		if m.deps.NeedsSetup() && !m.setupShown {
@@ -255,6 +364,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.screen == screenSetup && m.deps.Ready() {
 			m.screen, m.status = screenHome, "Setup complete"
+		}
+		return m, nil
+
+	case providerStateMsg:
+		if msg.states != nil {
+			m.providerState = msg.states
+		}
+		m.providerLoading = false
+		if msg.err != nil {
+			m.err = msg.err
+		}
+		if m.screen == screenProviders {
+			index := m.main.Index()
+			m.main.SetItems(m.providerItems())
+			m.main.Select(index)
 		}
 		return m, nil
 
@@ -456,7 +580,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitFor(m.dlCh)
 
 	case spinner.TickMsg:
-		if m.screen != screenBusy && !(m.screen == screenLibrary && m.libraryLoading) {
+		if m.screen != screenBusy && !(m.screen == screenLibrary && m.libraryLoading) && !(m.screen == screenProviders && m.providerLoading) {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -491,6 +615,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.screen != screenBusy && (key == "ctrl+l" || (key == "l" && !(m.screen == screenHome && m.focus == focusSearch) && m.screen != screenHelp)) {
 		return m.openLibrary()
+	}
+	if m.screen != screenBusy && key == "ctrl+p" {
+		return m.openProviders()
 	}
 
 	switch m.screen {
@@ -628,6 +755,44 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.main, cmd = m.main.Update(msg)
 		return m, cmd
 
+	case screenProviders:
+		switch key {
+		case "esc":
+			m.screen, m.err, m.status = screenHome, nil, ""
+			m.layout()
+			return m, tea.Batch(loadHomeCmd(m.st, m.libraryDir))
+		case "enter", " ":
+			selected, ok := m.main.SelectedItem().(providerItem)
+			if !ok {
+				return m, nil
+			}
+			enabled := !selected.enabled
+			if m.st != nil {
+				if err := m.st.SetProviderEnabled(context.Background(), selected.name, enabled); err != nil {
+					m.err = err
+					return m, nil
+				}
+			}
+			state := m.providerState[selected.name]
+			state.Name, state.Enabled = selected.name, enabled
+			m.providerState[selected.name] = state
+			index := m.main.Index()
+			m.main.SetItems(m.providerItems())
+			m.main.Select(index)
+			if enabled {
+				m.status = selected.name + " enabled"
+			} else {
+				m.status = selected.name + " disabled"
+			}
+			return m, nil
+		case "r":
+			m.providerLoading = true
+			return m, providerStateCmd(m.st)
+		}
+		var cmd tea.Cmd
+		m.main, cmd = m.main.Update(msg)
+		return m, cmd
+
 	case screenSetup:
 		switch key {
 		case "esc", "enter":
@@ -664,7 +829,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.screen, m.busy, m.err = screenBusy, busySearch, nil
 			m.status = fmt.Sprintf("Searching %q…", query)
-			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.providers, query))
+			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.activeProviders(), query))
 		case "tab", "down":
 			switch {
 			case len(m.resume.Items()) > 0:
@@ -739,7 +904,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.screen, m.busy, m.err = screenBusy, busySearch, nil
 			m.status = fmt.Sprintf("Searching %q…", selected.query)
-			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.providers, selected.query))
+			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.activeProviders(), selected.query))
 		case "ctrl+r":
 			if m.st != nil {
 				if err := m.st.ClearSearches(context.Background()); err != nil {
@@ -843,7 +1008,7 @@ func (m Model) scrollMouse(x, y, delta int) Model {
 				m.recent.CursorDown()
 			}
 		}
-	case screenResults, screenLibrary:
+	case screenResults, screenLibrary, screenProviders:
 		if y >= m.bodyOffset() {
 			if delta < 0 {
 				m.main.CursorUp()
@@ -881,6 +1046,8 @@ func (m Model) clickMouse(x, y int) (tea.Model, tea.Cmd) {
 		return m.clickEpisodes(bx, by)
 	case screenLibrary:
 		return m.clickList(&m.main, by, 4, screenLibrary)
+	case screenProviders:
+		return m.clickList(&m.main, by, 4, screenProviders)
 	}
 	return m, nil
 }
@@ -1127,6 +1294,8 @@ func (m Model) bodyView() string {
 		body = m.downloadsView()
 	case screenLibrary:
 		body = m.libraryView()
+	case screenProviders:
+		body = m.providersView()
 	case screenSetup:
 		body = m.setupView()
 	case screenBusy:
@@ -1163,10 +1332,14 @@ func (m Model) providerLabel() string {
 	if m.screen == screenEpisodes || m.screen == screenDownloads {
 		return m.providerName()
 	}
-	if len(m.providers) > 1 {
-		return fmt.Sprintf("%d providers", len(m.providers))
+	active := m.activeProviders()
+	if len(active) > 1 {
+		return fmt.Sprintf("%d providers", len(active))
 	}
-	return m.providerName()
+	if len(active) == 1 {
+		return active[0].Name()
+	}
+	return "no providers"
 }
 
 func (m Model) screenName() string {
@@ -1179,6 +1352,8 @@ func (m Model) screenName() string {
 		return "downloads"
 	case screenLibrary:
 		return "library"
+	case screenProviders:
+		return "providers"
 	case screenSetup:
 		return "setup"
 	case screenBusy:
@@ -1205,6 +1380,8 @@ func (m Model) footer() string {
 		items = []string{hint("x", "cancel"), hint("r", "retry"), hint("o", "folder"), hint("esc", "back")}
 	case screenLibrary:
 		items = []string{hint("enter", "play"), hint("o", "folder"), hint("r", "rescan"), hint("esc", "back")}
+	case screenProviders:
+		items = []string{hint("space", "toggle"), hint("r", "refresh"), hint("esc", "back")}
 	case screenSetup:
 		items = []string{hint("r", "recheck"), hint("enter", "continue")}
 	case screenBusy:
@@ -1385,6 +1562,78 @@ func (m Model) setupView() string {
 	)
 }
 
+func (m Model) providerItems() []list.Item {
+	items := make([]list.Item, 0, len(m.providers))
+	for _, p := range m.providers {
+		state, ok := m.providerState[p.Name()]
+		enabled := true
+		if ok {
+			enabled = state.Enabled
+		}
+		errText := state.LastError
+		if i := strings.IndexByte(errText, '\n'); i >= 0 {
+			errText = errText[:i]
+		}
+		if len(errText) > 90 {
+			errText = errText[:90] + "…"
+		}
+		items = append(items, providerItem{
+			name: p.Name(), url: p.SiteURL(), enabled: enabled,
+			lastOK: state.LastOK, lastError: errText,
+		})
+	}
+	return items
+}
+
+func (m Model) activeProviders() []provider.Provider {
+	var out []provider.Provider
+	for _, p := range m.providers {
+		if state, ok := m.providerState[p.Name()]; ok && !state.Enabled {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func (m Model) openProviders() (tea.Model, tea.Cmd) {
+	m.screen, m.providerLoading, m.err, m.status = screenProviders, true, nil, ""
+	m.main.SetItems(m.providerItems())
+	m.main.Select(0)
+	m.layout()
+	return m, tea.Batch(m.spinner.Tick, providerStateCmd(m.st))
+}
+
+func (m Model) providersView() string {
+	content := m.viewWidth()
+	inner := content - 4
+	if m.providerLoading {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.crumbs("Home", "providers"),
+			"",
+			panel("Providers", m.spinner.View()+" Loading provider status…", inner, true),
+		)
+	}
+	if len(m.providers) == 0 {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.crumbs("Home", "providers"),
+			"",
+			panel("Providers", dimStyle.Render("No providers configured."), inner, true),
+		)
+	}
+	enabled := 0
+	for _, p := range m.providers {
+		if state, ok := m.providerState[p.Name()]; !ok || state.Enabled {
+			enabled++
+		}
+	}
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.crumbs("Home", "providers", fmt.Sprintf("%d/%d enabled", enabled, len(m.providers))),
+		"",
+		panel("Providers", m.main.View(), inner, true),
+	)
+}
+
 func (m Model) libraryView() string {
 	content := m.viewWidth()
 	inner := content - 4
@@ -1451,11 +1700,13 @@ func (m Model) downloadsView() string {
 			state = "failed"
 			color = errStyle
 		}
-		line := fmt.Sprintf("%s E%03d  %s", marker, q.episode.Number, q.episode.Title)
-		if q.episode.Title == "" {
-			line = fmt.Sprintf("%s E%03d", marker, q.episode.Number)
+		line := fmt.Sprintf("%s E%03d", marker, q.episode.Number)
+		if q.episode.Title != "" {
+			avail := inner - 2 - lipgloss.Width(line) - len(state) - 3
+			if avail > 6 {
+				line += "  " + scrollText(q.episode.Title, m.scrollOffset(), avail)
+			}
 		}
-		line = lipgloss.NewStyle().MaxWidth(max(10, inner-3-len(state))).Render(line)
 		line += dimStyle.Render(strings.Repeat(" ", max(1, inner-2-lipgloss.Width(line)-len(state))) + state)
 		lines = append(lines, color.Render(line))
 		if q.state == qActive {
@@ -1507,7 +1758,7 @@ func (m Model) helpView() string {
 		keyline("esc", "back"),
 		keyline("q", "quit"),
 		keyline("ctrl+h", "toggle help"),
-		keyline("tab", "search / list"),
+		keyline("ctrl+p", "providers"),
 		keyline("ctrl+l", "downloaded library"),
 	}, "\n")
 	mediaKeys := strings.Join([]string{
@@ -1718,6 +1969,23 @@ func checkDepsCmd() tea.Cmd {
 	return func() tea.Msg { return depsMsg(deps.Check()) }
 }
 
+type providerStateMsg struct {
+	states map[string]store.ProviderState
+	err    error
+}
+
+func providerStateCmd(st *store.Store) tea.Cmd {
+	return func() tea.Msg {
+		if st == nil {
+			return providerStateMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		states, err := st.ProviderStates(ctx)
+		return providerStateMsg{states: states, err: err}
+	}
+}
+
 type homeMsg struct {
 	recents  []store.Search
 	progress []store.Progress
@@ -1805,7 +2073,7 @@ func searchCmd(st *store.Store, providers []provider.Provider, query string) tea
 			_ = st.AddSearch(ctx, query)
 		}
 		if len(providers) == 0 {
-			return searchMsg{query: query, err: fmt.Errorf("no providers configured")}
+			return searchMsg{query: query, err: fmt.Errorf("all providers are disabled")}
 		}
 
 		type response struct {
@@ -1817,6 +2085,13 @@ func searchCmd(st *store.Store, providers []provider.Provider, query string) tea
 		for i, p := range providers {
 			go func(i int, p provider.Provider) {
 				animes, err := p.Search(ctx, query)
+				if st != nil {
+					if err != nil {
+						_ = st.MarkProviderError(ctx, p.Name(), err.Error())
+					} else {
+						_ = st.MarkProviderOK(ctx, p.Name())
+					}
+				}
 				ch <- response{index: i, animes: animes, err: err}
 			}(i, p)
 		}

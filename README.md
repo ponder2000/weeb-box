@@ -44,7 +44,7 @@ the same status and commands. Press `r` to recheck after installing, or
 
 ## Keys
 
-Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library from anywhere.
+Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list.
 
 | screen  | keys |
 | ------- | ---- |
@@ -54,6 +54,7 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 | episodes | `↑`/`↓` move, `enter` play, `d` download selected, `a` download from selected to the end, `v` view queue, `esc` back |
 | downloads | `x` cancel, `r` retry last failed episode, `o` open folder, `esc` back |
 | library | `↑`/`↓` move, `enter` play the local file, `o` open folder, `r` rescan, `esc` home |
+| providers | `space`/`enter` enable or disable, `r` refresh status, `esc` back |
 | setup | `r` recheck dependencies, `enter`/`esc` continue |
 
 Only one download job runs at a time; starting a queue stops at the first failure. `r` retries only the last failed episode, not a cancelled queue.
@@ -64,7 +65,7 @@ For a modern control bar, install [uosc](https://github.com/tomasklaen/uosc) and
 
 Mouse: wheel scrolls the list under the pointer; click a row to select it, click it again (or double-click) to open/play. On the episode detail panel, clicking Play/Download/Download-from-here runs that action. Terminal text selection may need Shift or Option while mouse reporting is on.
 
-The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete.
+The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete. Long titles auto-scroll horizontally in resume/recent rows, search results, the library, and the download queue.
 
 ## Storage
 
@@ -90,7 +91,7 @@ The Library (`ctrl+l`) scans the download root—or a separate `-library` root�
 
 ## Providers
 
-Search runs against all registered providers in parallel. Results show their source; selecting a result pins that provider for episodes, playback, and downloads.
+Search runs against all enabled providers in parallel. Results show their source; selecting a result pins that provider for episodes, playback, and downloads. `ctrl+p` lists each provider with its URL, enabled state, and the time of its last successful search, and lets you disable sources you do not want. Toggles persist in SQLite.
 
 | provider | site | search |
 | --- | --- | --- |

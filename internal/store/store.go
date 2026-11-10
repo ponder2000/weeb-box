@@ -52,6 +52,13 @@ type Stats struct {
 	Watched   int
 }
 
+type ProviderState struct {
+	Name      string
+	Enabled   bool
+	LastOK    int64
+	LastError string
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS search_history (
 	query     TEXT PRIMARY KEY,
@@ -85,6 +92,13 @@ CREATE TABLE IF NOT EXISTS downloads (
 	PRIMARY KEY (provider, episode_url)
 );
 CREATE INDEX IF NOT EXISTS idx_downloads_recent ON downloads(completed_at DESC);
+
+CREATE TABLE IF NOT EXISTS provider_state (
+	name       TEXT PRIMARY KEY,
+	enabled    INTEGER NOT NULL DEFAULT 1,
+	last_ok    INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT NOT NULL DEFAULT ''
+);
 `
 
 func DefaultPath() (string, error) {
@@ -299,6 +313,53 @@ func (s *Store) DownloadsForAnime(ctx context.Context, provider, animeURL string
 		out[d.EpisodeNumber] = d
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ProviderStates(ctx context.Context) (map[string]ProviderState, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT name, enabled, last_ok, last_error FROM provider_state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ProviderState{}
+	for rows.Next() {
+		var state ProviderState
+		var enabled int
+		if err := rows.Scan(&state.Name, &enabled, &state.LastOK, &state.LastError); err != nil {
+			return nil, err
+		}
+		state.Enabled = enabled != 0
+		out[state.Name] = state
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SetProviderEnabled(ctx context.Context, name string, enabled bool) error {
+	value := 0
+	if enabled {
+		value = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO provider_state(name, enabled, last_ok, last_error) VALUES(?, ?, 0, '')
+		ON CONFLICT(name) DO UPDATE SET enabled=excluded.enabled`, name, value)
+	return err
+}
+
+func (s *Store) MarkProviderOK(ctx context.Context, name string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO provider_state(name, enabled, last_ok, last_error) VALUES(?, 1, ?, '')
+		ON CONFLICT(name) DO UPDATE SET last_ok=excluded.last_ok, last_error=''`, name, time.Now().Unix())
+	return err
+}
+
+func (s *Store) MarkProviderError(ctx context.Context, name, message string) error {
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO provider_state(name, enabled, last_ok, last_error) VALUES(?, 1, 0, ?)
+		ON CONFLICT(name) DO UPDATE SET last_error=excluded.last_error`, name, message)
+	return err
 }
 
 func (s *Store) Stats(ctx context.Context) (Stats, error) {

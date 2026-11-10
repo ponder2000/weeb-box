@@ -6,6 +6,46 @@ import (
 	"testing"
 )
 
+func TestProviderStates(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if err := st.MarkProviderOK(ctx, "gogoanime"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProviderEnabled(ctx, "anizone", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkProviderError(ctx, "kissanime", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	states, err := st.ProviderStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !states["gogoanime"].Enabled || states["gogoanime"].LastOK == 0 {
+		t.Fatalf("gogo = %+v", states["gogoanime"])
+	}
+	if states["anizone"].Enabled {
+		t.Fatalf("anizone = %+v", states["anizone"])
+	}
+	if states["kissanime"].LastError != "boom" {
+		t.Fatalf("kissanime = %+v", states["kissanime"])
+	}
+	// Marking a provider OK must not re-enable a disabled one.
+	if err := st.MarkProviderOK(ctx, "anizone"); err != nil {
+		t.Fatal(err)
+	}
+	states, err = st.ProviderStates(ctx)
+	if err != nil || states["anizone"].Enabled {
+		t.Fatalf("anizone after mark = %+v err=%v", states["anizone"], err)
+	}
+}
+
 func TestSearchProgressAndDownloads(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(filepath.Join(t.TempDir(), "test.db"))

@@ -46,6 +46,8 @@ func New(baseURL string) *Adapter {
 
 func (a *Adapter) Name() string { return "anizone" }
 
+func (a *Adapter) SiteURL() string { return a.BaseURL }
+
 func (a *Adapter) Search(ctx context.Context, query string) ([]provider.Anime, error) {
 	body, err := a.get(ctx, a.BaseURL+"/wp-json/wp/v2/az_series?search="+url.QueryEscape(query)+"&per_page=20")
 	if err != nil {

@@ -44,6 +44,8 @@ func New(baseURL string) *Adapter {
 
 func (a *Adapter) Name() string { return "gogoanime" }
 
+func (a *Adapter) SiteURL() string { return a.BaseURL }
+
 func (a *Adapter) Search(ctx context.Context, query string) ([]provider.Anime, error) {
 	body, err := a.get(ctx, a.BaseURL+"/?s="+url.QueryEscape(query), nil)
 	if err != nil {

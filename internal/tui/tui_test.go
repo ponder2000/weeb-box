@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/ponder2000/weeb-box/internal/deps"
 	lib "github.com/ponder2000/weeb-box/internal/library"
 	"github.com/ponder2000/weeb-box/internal/provider"
@@ -81,7 +82,8 @@ func TestProgressHelpers(t *testing.T) {
 	}
 }
 
-func (stubProvider) Name() string { return "gogoanime" }
+func (stubProvider) Name() string    { return "gogoanime" }
+func (stubProvider) SiteURL() string { return "https://gogoanime.example" }
 
 func (stubProvider) Search(context.Context, string) ([]provider.Anime, error) { return nil, nil }
 
@@ -101,7 +103,8 @@ type fixedProvider struct {
 	err    error
 }
 
-func (f fixedProvider) Name() string { return f.name }
+func (f fixedProvider) Name() string    { return f.name }
+func (f fixedProvider) SiteURL() string { return "https://" + f.name + ".example" }
 func (f fixedProvider) Search(context.Context, string) ([]provider.Anime, error) {
 	return f.animes, f.err
 }
@@ -110,6 +113,34 @@ func (f fixedProvider) Episodes(context.Context, provider.Anime) ([]provider.Epi
 }
 func (f fixedProvider) Stream(context.Context, provider.Episode) (provider.Stream, error) {
 	return provider.Stream{}, nil
+}
+
+func TestScrollText(t *testing.T) {
+	if got := scrollText("short", 5, 10); got != "short" {
+		t.Fatalf("short = %q", got)
+	}
+	got := scrollText("abcdefghij", 1, 5)
+	if got != "bcdef" {
+		t.Fatalf("scrolled = %q", got)
+	}
+	if runewidth.StringWidth(got) > 5 {
+		t.Fatalf("width = %d", runewidth.StringWidth(got))
+	}
+}
+
+func TestProviderToggleFiltersSearch(t *testing.T) {
+	m := New([]provider.Provider{
+		fixedProvider{name: "alpha"},
+		fixedProvider{name: "beta"},
+	}, t.TempDir(), nil)
+	if got := m.activeProviders(); len(got) != 2 {
+		t.Fatalf("active = %d", len(got))
+	}
+	m.providerState["alpha"] = store.ProviderState{Name: "alpha", Enabled: false}
+	got := m.activeProviders()
+	if len(got) != 1 || got[0].Name() != "beta" {
+		t.Fatalf("active = %v", got)
+	}
 }
 
 func TestSearchAggregatesProviders(t *testing.T) {
@@ -166,6 +197,11 @@ func TestViewFitsTerminal(t *testing.T) {
 				}
 			},
 			"help": func() { m.screen = screenHelp },
+			"providers": func() {
+				m.screen = screenProviders
+				m.main.SetItems(m.providerItems())
+				m.providerLoading = false
+			},
 			"setup": func() {
 				m.screen = screenSetup
 				m.deps = deps.Report{Commands: []string{

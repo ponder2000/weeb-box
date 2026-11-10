@@ -30,6 +30,7 @@ type Stream struct {
 
 type Provider interface {
 	Name() string
+	SiteURL() string
 	Search(ctx context.Context, query string) ([]Anime, error)
 	Episodes(ctx context.Context, anime Anime) ([]Episode, error)
 	Stream(ctx context.Context, episode Episode) (Stream, error)
