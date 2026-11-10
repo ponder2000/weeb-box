@@ -773,6 +773,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSettingsEdit(msg)
 	}
 
+	// shift+tab rotates through the main screens without leaving the app.
+	if m.screen != screenBusy && key == "shift+tab" {
+		return m.cycleScreen()
+	}
+
 	if key == "ctrl+h" || (key == "?" && !(m.screen == screenHome && m.focus == focusSearch)) {
 		if m.screen == screenHelp {
 			m.screen = m.helpReturn
@@ -1266,6 +1271,38 @@ func (m Model) openSettings() (tea.Model, tea.Cmd) {
 	m.screen, m.dirEditing, m.err, m.status = screenSettings, false, nil, ""
 	m.layout()
 	return m, nil
+}
+
+// mainScreens is the shift+tab rotation order.
+var mainScreens = []screen{screenHome, screenGenres, screenLibrary, screenDownloads, screenProviders, screenSettings}
+
+// cycleScreen moves to the next top-level screen. Results, episodes and a
+// genre's title list belong to the search/browse flow, so they rotate on to
+// the screen after their flow.
+func (m Model) cycleScreen() (tea.Model, tea.Cmd) {
+	index := 0
+	for i, s := range mainScreens {
+		if m.screen == s {
+			index = i
+			break
+		}
+	}
+	switch mainScreens[(index+1)%len(mainScreens)] {
+	case screenHome:
+		return m.goHome()
+	case screenGenres:
+		return m.openGenres()
+	case screenLibrary:
+		return m.openLibrary()
+	case screenDownloads:
+		m.screen, m.err, m.status = screenDownloads, nil, ""
+		m.layout()
+		return m, nil
+	case screenProviders:
+		return m.openProviders()
+	default:
+		return m.openSettings()
+	}
 }
 
 // openGenres shows the AniList genre list that drives Browse.
@@ -2086,6 +2123,9 @@ func (m Model) footer() string {
 	case screenCover:
 		items = []string{hint("esc", "back")}
 	}
+	if m.screen != screenBusy && m.screen != screenHelp && m.screen != screenSetup && m.screen != screenCover && !(m.screen == screenSettings && m.dirEditing) {
+		items = append(items, hint("⇧tab", "screens"))
+	}
 	sep := dimStyle.Render("  ·  ")
 	fixed := ""
 	if m.screen != screenSettings && m.screen != screenBusy {
@@ -2685,6 +2725,7 @@ func (m Model) helpView() string {
 		keyline("ctrl+p", "providers"),
 		keyline("ctrl+o", "settings"),
 		keyline("ctrl+l", "downloaded library"),
+		keyline("shift+tab", "next main screen"),
 		keyline("i", "view cover"),
 	}, "\n")
 	mediaKeys := strings.Join([]string{

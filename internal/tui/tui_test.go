@@ -1134,3 +1134,25 @@ func TestNativeCoverDecision(t *testing.T) {
 		t.Fatalf("staged escape = %q", staged)
 	}
 }
+
+func TestShiftTabCyclesMainScreens(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	order := []screen{screenGenres, screenLibrary, screenDownloads, screenProviders, screenSettings, screenHome}
+	for _, want := range order {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+		m = updated.(Model)
+		if m.screen != want {
+			t.Fatalf("shift+tab screen = %v, want %v", m.screen, want)
+		}
+	}
+
+	// Results, episodes and a genre's title list resume at the next flow.
+	for _, from := range []screen{screenResults, screenEpisodes, screenBrowse} {
+		m.screen = from
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+		if got := updated.(Model).screen; got != screenGenres {
+			t.Fatalf("from screen %v: screen = %v, want genres", from, got)
+		}
+	}
+}
