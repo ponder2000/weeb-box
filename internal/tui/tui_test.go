@@ -1514,3 +1514,12 @@ func TestHomeHeightGrowsWithTerminal(t *testing.T) {
 		t.Errorf("120x40 home rows = %d, expected the panel to fill", large)
 	}
 }
+
+func TestPadLines(t *testing.T) {
+	if got := padLines("a", 3); got != "a\n\n" {
+		t.Fatalf("padLines = %q", got)
+	}
+	if got := padLines("a\nb\nc", 2); got != "a\nb\nc" {
+		t.Fatalf("padLines shrank = %q", got)
+	}
+}

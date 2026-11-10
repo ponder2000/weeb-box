@@ -2488,6 +2488,10 @@ func (m Model) homeView() string {
 	if len(m.recent.Items()) == 0 {
 		recentBody = dimStyle.Render("No searches yet")
 	}
+	// Keep the two panels level when only one list has rows.
+	if h := max(lipgloss.Height(resumeBody), lipgloss.Height(recentBody)); h > 1 {
+		resumeBody, recentBody = padLines(resumeBody, h), padLines(recentBody, h)
+	}
 	left := panel("Continue watching", resumeBody, inner, m.focus == focusResume)
 	right := panel("Recent searches", recentBody, inner, m.focus == focusRecent)
 
@@ -3859,4 +3863,12 @@ func (m *Model) cycleTheme(step int) {
 	if m.st != nil {
 		_ = m.st.SetSetting(context.Background(), "theme", m.theme)
 	}
+}
+
+// padLines grows a rendered block to height lines so sibling panels align.
+func padLines(s string, height int) string {
+	if lines := lipgloss.Height(s); lines < height {
+		return s + strings.Repeat("\n", height-lines)
+	}
+	return s
 }
