@@ -62,13 +62,10 @@ const (
 var qualityOptions = []string{"auto", "1080p", "720p", "480p"}
 
 const (
-	creatorURL      = "https://x.com/chotathanos"
-	creatorText     = "developed by @chotathanos"
-	metaTTL         = 7 * 24 * time.Hour
-	coverCols       = 24
-	coverRows       = 10
-	coverViewWidth  = 60
-	coverViewHeight = 30
+	creatorURL     = "https://x.com/chotathanos"
+	creatorText    = "developed by @chotathanos"
+	metaTTL        = 7 * 24 * time.Hour
+	minPreviewCols = 8
 )
 
 // metaProvider is the metadata client surface the TUI needs; tests stub it.
@@ -269,7 +266,7 @@ type Model struct {
 	metaCache    map[string]metadata.Info
 	metaLoading  map[string]bool
 	metaFailed   map[string]bool
-	coverArt     map[string]string
+	coverArt     map[string]coverArtEntry
 	coverLoading map[string]bool
 	browseGenre  string
 	browsePage   int
@@ -375,7 +372,7 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 		metaCache:      map[string]metadata.Info{},
 		metaLoading:    map[string]bool{},
 		metaFailed:     map[string]bool{},
-		coverArt:       map[string]string{},
+		coverArt:       map[string]coverArtEntry{},
 		coverLoading:   map[string]bool{},
 	}
 	if len(providers) > 0 {
@@ -418,6 +415,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
+		// Cover art is rendered at the previous cell size; draw it again at
+		// the new one. Metadata stays cached.
+		if m.screen == screenResults || m.screen == screenBrowse {
+			return m, m.ensurePreview()
+		}
 		return m, nil
 
 	case tea.MouseMsg:
@@ -530,8 +532,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case coverMsg:
 		delete(m.coverLoading, msg.key)
+		cols, rows := m.previewCoverSize()
+		if msg.cols != cols || msg.rows != rows {
+			// The terminal changed size while this render was in flight;
+			// redraw at the current size instead of showing squashed art.
+			return m, m.ensurePreview()
+		}
 		if msg.err == nil && msg.art != "" {
-			m.coverArt[msg.key] = msg.art
+			m.coverArt[msg.key] = coverArtEntry{art: msg.art, cols: cols, rows: rows}
 		}
 		return m, nil
 
@@ -539,6 +547,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.coverViewLoad = false
 		if msg.err != nil {
 			m.err = msg.err
+			return m, nil
+		}
+		cols, rows := m.coverViewerSize()
+		if msg.cols != cols || msg.rows != rows {
+			// Resized mid-render: retry once at the current size.
+			if m.screen == screenCover && m.covers != nil && m.coverInfo.CoverURL != "" {
+				m.coverViewLoad = true
+				return m, coverViewCmd(m.covers, m.coverInfo.CoverURL, cols, rows)
+			}
 			return m, nil
 		}
 		m.coverViewArt = msg.art
@@ -1397,20 +1414,22 @@ func (m *Model) ensureMeta(title string) tea.Cmd {
 	return metaCmd(m.st, m.meta, title)
 }
 
-// ensureCover renders the cover for info unless it is cached or in flight.
+// ensureCover renders the cover for info unless it is cached at the current
+// terminal size or already in flight.
 func (m *Model) ensureCover(info metadata.Info) tea.Cmd {
 	if info.CoverURL == "" || m.covers == nil {
 		return nil
 	}
 	key := metadata.Key(info.Title)
-	if _, ok := m.coverArt[key]; ok {
+	cols, rows := m.previewCoverSize()
+	if entry, ok := m.coverArt[key]; ok && entry.cols == cols && entry.rows == rows {
 		return nil
 	}
 	if m.coverLoading[key] {
 		return nil
 	}
 	m.coverLoading[key] = true
-	return coverCmd(m.covers, key, info.CoverURL)
+	return coverCmd(m.covers, key, info.CoverURL, cols, rows)
 }
 
 // coverSelection resolves the metadata for the item the cover key applies to.
@@ -1454,13 +1473,14 @@ func (m Model) openCover() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.coverReturn, m.coverInfo, m.coverViewArt = m.screen, info, ""
+	cols, rows := m.coverViewerSize()
 	if native, ok := nativeCover(m.covers); ok {
 		m.status = "Loading cover…"
-		return m, nativeCoverCmd(native, info.CoverURL)
+		return m, nativeCoverCmd(native, info.CoverURL, cols, rows)
 	}
 	m.screen, m.coverViewLoad, m.status = screenCover, true, ""
 	m.layout()
-	return m, tea.Batch(m.spinner.Tick, coverViewCmd(m.covers, info.CoverURL))
+	return m, tea.Batch(m.spinner.Tick, coverViewCmd(m.covers, info.CoverURL, cols, rows))
 }
 
 // ensurePreview loads metadata (or just the cover) for the selected list item.
@@ -1553,9 +1573,11 @@ func (m Model) previewBody(selected item, width int) string {
 		return errStyle.Render("18+ hidden")
 	}
 	// Covers are cached under the resolved title, which may differ from the
-	// search title that produced the metadata entry.
-	if art := m.coverArt[metadata.Key(info.Title)]; art != "" {
-		lines = append(lines, strings.Split(art, "\n")...)
+	// search title that produced the metadata entry, and only at the current
+	// cell size.
+	_, rows := m.previewCoverSize()
+	if art := m.coverArt[metadata.Key(info.Title)]; art.art != "" && art.cols == width && art.rows == rows {
+		lines = append(lines, strings.Split(art.art, "\n")...)
 		lines = append(lines, "")
 	}
 	name := info.Title
@@ -2268,13 +2290,14 @@ func (m Model) resultsView() string {
 	crumb := m.crumbs("Home", fmt.Sprintf("%q", m.search.Value()))
 	if m.previewSplit() {
 		leftOuter := m.resultsLeftOuter()
+		cols, _ := m.previewCoverSize()
 		return lipgloss.JoinVertical(lipgloss.Left,
 			crumb,
 			"",
 			lipgloss.JoinHorizontal(lipgloss.Top,
 				panel("Results", body, max(10, leftOuter-2), true),
 				"  ",
-				panel("Preview", m.previewBody(selected, coverCols), coverCols+2, false),
+				panel("Preview", m.previewBody(selected, cols), cols+2, false),
 			),
 		)
 	}
@@ -2291,14 +2314,51 @@ func (m Model) previewSplit() bool {
 	return m.width >= 100
 }
 
+// previewCoverSize returns the half-block art size for the results/browse side
+// panel. One cell is one pixel column and two pixel rows, so a 2:3 cover wants
+// rows ≈ cols*3/4. The height cap mirrors layout(): the panel body is
+// m.height-13 rows and the art leaves five lines for title, rating and tags.
+func (m Model) previewCoverSize() (cols, rows int) {
+	switch {
+	case m.width >= 120:
+		cols = 38
+	case m.width >= 100:
+		cols = 32
+	default:
+		cols = 24
+	}
+	if maxRows := max(6, m.height-18); cols*3/4 > maxRows {
+		cols = maxRows * 4 / 3
+	}
+	cols = max(minPreviewCols, cols)
+	return cols, cols * 3 / 4
+}
+
+// coverViewerSize returns the full-screen half-block cover size: about 60% of
+// the terminal, clamped so the panel still fits at 80x24.
+func (m Model) coverViewerSize() (cols, rows int) {
+	cols = max(10, m.width*3/5)
+	rows = cols * 3 / 4
+	if maxRows := max(3, m.height-16); rows > maxRows {
+		cols = max(10, maxRows*4/3)
+		rows = cols * 3 / 4
+	}
+	if maxCols := max(10, m.viewWidth()-8); cols > maxCols {
+		cols = maxCols
+		rows = cols * 3 / 4
+	}
+	return cols, rows
+}
+
 // resultsLeftOuter is the rendered width of the results list column.
 func (m Model) resultsLeftOuter() int {
 	content := m.viewWidth()
 	if !m.previewSplit() {
 		return content
 	}
-	// Preview panel width is coverCols+2 content + 2 border, plus a 2-column gap.
-	return content - (coverCols + 4) - 2
+	// Preview panel width is cols+2 content + 2 border, plus a 2-column gap.
+	cols, _ := m.previewCoverSize()
+	return content - (cols + 4) - 2
 }
 
 func (m Model) genresView() string {
@@ -2332,13 +2392,14 @@ func (m Model) browseView() string {
 	selected, _ := m.main.SelectedItem().(item)
 	if m.previewSplit() {
 		leftOuter := m.resultsLeftOuter()
+		cols, _ := m.previewCoverSize()
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.crumbs("Home", "browse", m.browseGenre),
 			"",
 			lipgloss.JoinHorizontal(lipgloss.Top,
 				panel(title, m.main.View(), max(10, leftOuter-2), true),
 				"  ",
-				panel("Preview", m.previewBody(selected, coverCols), coverCols+2, false),
+				panel("Preview", m.previewBody(selected, cols), cols+2, false),
 			),
 		)
 	}
@@ -2375,8 +2436,7 @@ func (m Model) coverView() string {
 	}
 	// Keep the art inside what is left after the header, footer, crumbs,
 	// metadata lines and the status row.
-	artWidth := max(10, min(coverViewWidth, inner-4))
-	artHeight := min(coverViewHeight, max(3, m.height-16))
+	artWidth, artHeight := m.coverViewerSize()
 	art := lipgloss.NewStyle().MaxWidth(artWidth).MaxHeight(artHeight).Render(strings.TrimRight(m.coverViewArt, "\n"))
 	name := m.coverInfo.Title
 	if name == "" {
@@ -3006,15 +3066,27 @@ type metaMsg struct {
 	err  error
 }
 
+// coverArtEntry keeps rendered art with the cell size it was drawn for, so a
+// stale render from a previous terminal size is never displayed.
+type coverArtEntry struct {
+	art  string
+	cols int
+	rows int
+}
+
 type coverMsg struct {
-	key string
-	art string
-	err error
+	key  string
+	art  string
+	cols int
+	rows int
+	err  error
 }
 
 type coverViewMsg struct {
-	art string
-	err error
+	art  string
+	cols int
+	rows int
+	err  error
 }
 
 type nativeCoverMsg struct {
@@ -3063,32 +3135,32 @@ func metaCmd(st *store.Store, meta metaProvider, title string) tea.Cmd {
 	}
 }
 
-func coverCmd(covers coverRenderer, key, url string) tea.Cmd {
+func coverCmd(covers coverRenderer, key, url string, cols, rows int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		art, err := covers.Render(ctx, url, coverCols, coverRows)
-		return coverMsg{key: key, art: art, err: err}
+		art, err := covers.Render(ctx, url, cols, rows)
+		return coverMsg{key: key, art: art, cols: cols, rows: rows, err: err}
 	}
 }
 
 // coverViewCmd renders the full-screen half-block cover.
-func coverViewCmd(covers coverRenderer, url string) tea.Cmd {
+func coverViewCmd(covers coverRenderer, url string, cols, rows int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		art, err := covers.Render(ctx, url, coverViewWidth, coverViewHeight)
-		return coverViewMsg{art: art, err: err}
+		art, err := covers.Render(ctx, url, cols, rows)
+		return coverViewMsg{art: art, cols: cols, rows: rows, err: err}
 	}
 }
 
 // nativeCoverCmd renders the inline escape and stages it in a temp file for
 // the viewer process to cat.
-func nativeCoverCmd(covers nativeCoverRenderer, url string) tea.Cmd {
+func nativeCoverCmd(covers nativeCoverRenderer, url string, cols, rows int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		escape, err := covers.RenderNative(ctx, url, coverViewWidth, coverViewHeight)
+		escape, err := covers.RenderNative(ctx, url, cols, rows)
 		if err != nil {
 			return nativeCoverMsg{err: err}
 		}

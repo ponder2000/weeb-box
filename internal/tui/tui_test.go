@@ -128,15 +128,21 @@ func (f *fakeMeta) Browse(_ context.Context, genre string, page int, includeAdul
 	return f.items, f.err
 }
 
-// fakeCover stubs terminal artwork.
+// fakeCover stubs terminal artwork. Renders are sized like the real renderer.
 type fakeCover struct {
 	art   string
 	calls int
+	cols  int
+	rows  int
 }
 
-func (f *fakeCover) Render(context.Context, string, int, int) (string, error) {
+func (f *fakeCover) Render(_ context.Context, _ string, cols, rows int) (string, error) {
 	f.calls++
-	return f.art, nil
+	f.cols, f.rows = cols, rows
+	if f.art != "" {
+		return f.art, nil
+	}
+	return fakeArt(cols, rows), nil
 }
 
 // fakeNativeCover also advertises a native image protocol.
@@ -157,12 +163,17 @@ func runeKey(r rune) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
 }
 
-func fakeArt() string {
-	rows := make([]string, coverRows)
-	for i := range rows {
-		rows[i] = strings.Repeat("ART", coverCols/3)
+func fakeArt(cols, rows int) string {
+	line := fakeArtLine(cols)
+	lines := make([]string, rows)
+	for i := range lines {
+		lines[i] = line
 	}
-	return strings.Join(rows, "\n")
+	return strings.Join(lines, "\n")
+}
+
+func fakeArtLine(cols int) string {
+	return strings.Repeat("ART", max(1, cols/3))
 }
 
 // runCmd feeds metadata/browse/search messages into the model, expanding
@@ -334,7 +345,8 @@ func TestViewFitsTerminal(t *testing.T) {
 		}
 		key := metadata.Key(m.results[0].anime.Title)
 		m.metaCache[key] = info
-		m.coverArt[metadata.Key(info.Title)] = fakeArt()
+		artCols, artRows := m.previewCoverSize()
+		m.coverArt[metadata.Key(info.Title)] = coverArtEntry{art: fakeArt(artCols, artRows), cols: artCols, rows: artRows}
 
 		views := map[string]func(){
 			"home":    func() { m.screen = screenHome },
@@ -387,7 +399,7 @@ func TestViewFitsTerminal(t *testing.T) {
 			"cover": func() {
 				m.screen = screenCover
 				m.coverInfo = info
-				m.coverViewArt = fakeArt()
+				m.coverViewArt = fakeArt(artCols, artRows)
 				m.coverViewLoad = false
 			},
 		}
@@ -762,7 +774,7 @@ func TestResultsPreviewWideAndNarrow(t *testing.T) {
 		Tags: []string{"Magic", "Journey"}, CoverURL: "https://img/x.jpg",
 	}
 	fm := &fakeMeta{info: info}
-	fc := &fakeCover{art: fakeArt()}
+	fc := &fakeCover{}
 	m := resultsModel(t, fm, fc)
 
 	cmd := m.ensurePreview()
@@ -780,18 +792,22 @@ func TestResultsPreviewWideAndNarrow(t *testing.T) {
 	if fm.lookups != 1 || fc.calls != 1 {
 		t.Fatalf("lookups=%d coverCalls=%d", fm.lookups, fc.calls)
 	}
+	cols, rows := m.previewCoverSize()
+	if fc.cols != cols || fc.rows != rows {
+		t.Fatalf("cover rendered at %dx%d, want %dx%d", fc.cols, fc.rows, cols, rows)
+	}
 	wide := m.View()
 	if !strings.Contains(wide, "Preview") || !strings.Contains(wide, "PG-13") {
 		t.Error("wide results view is missing the preview panel")
 	}
-	if !strings.Contains(wide, strings.Repeat("ART", coverCols/3)) {
+	if !strings.Contains(wide, fakeArtLine(cols)) {
 		t.Error("wide results view is missing the cover art")
 	}
 
 	m.width, m.height = 80, 24
 	m.layout()
 	narrow := m.View()
-	if strings.Contains(narrow, strings.Repeat("ART", coverCols/3)) {
+	if strings.Contains(narrow, "ART") {
 		t.Error("narrow results view should not render the cover")
 	}
 	if strings.Contains(narrow, "Preview") {
@@ -799,6 +815,92 @@ func TestResultsPreviewWideAndNarrow(t *testing.T) {
 	}
 	if !strings.Contains(narrow, "PG-13") || !strings.Contains(narrow, "Adventure") {
 		t.Error("narrow results view is missing the compact metadata line")
+	}
+}
+
+func TestPreviewCoverSize(t *testing.T) {
+	for _, tc := range []struct{ w, h int }{{80, 24}, {100, 30}, {120, 40}, {160, 50}} {
+		m := New(nil, t.TempDir(), nil)
+		m.width, m.height = tc.w, tc.h
+		cols, rows := m.previewCoverSize()
+		if cols <= 0 || rows <= 0 {
+			t.Fatalf("%dx%d: size %dx%d", tc.w, tc.h, cols, rows)
+		}
+		// Five lines are left inside the panel body for title, rating and
+		// tags; layout() sizes that body at max(5, height-13).
+		if rows+5 > max(5, m.height-13) {
+			t.Errorf("%dx%d: %d art rows do not fit the panel height", tc.w, tc.h, rows)
+		}
+		if diff := rows - cols*3/4; diff < -1 || diff > 1 {
+			t.Errorf("%dx%d: %dx%d art breaks the 2:3 cover ratio", tc.w, tc.h, cols, rows)
+		}
+		if got, want := m.previewSplit(), tc.w >= 100; got != want {
+			t.Errorf("%dx%d: previewSplit = %v, want %v", tc.w, tc.h, got, want)
+		}
+		if m.previewSplit() && cols < 16 {
+			t.Errorf("%dx%d: preview art is only %d columns wide", tc.w, tc.h, cols)
+		}
+	}
+	// The tallest common terminal gets the full large size.
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 160, 50
+	if cols, _ := m.previewCoverSize(); cols != 38 {
+		t.Errorf("160x50 preview = %d columns, want 38", cols)
+	}
+}
+
+func TestPreviewCoverStaleSizeIgnored(t *testing.T) {
+	info := metadata.Info{Title: "Frieren", CoverURL: "https://img/x.jpg"}
+	fm := &fakeMeta{info: info}
+	fc := &fakeCover{}
+	m := resultsModel(t, fm, fc)
+	m.metaCache[metadata.Key("Frieren")] = info
+	m = runCmd(t, m, m.ensurePreview())
+	if fm.lookups != 0 || fc.calls != 1 {
+		t.Fatalf("lookups=%d coverCalls=%d", fm.lookups, fc.calls)
+	}
+	oldCols, oldRows := fc.cols, fc.rows
+
+	m.width, m.height = 160, 50
+	m.layout()
+	cmd := m.ensurePreview()
+	if cmd == nil {
+		t.Fatal("resize did not re-render the cover")
+	}
+	m = runCmd(t, m, cmd)
+	if fm.lookups != 0 {
+		t.Error("resize refetched metadata")
+	}
+	cols, rows := m.previewCoverSize()
+	if fc.calls != 2 || fc.cols != cols || fc.rows != rows {
+		t.Fatalf("calls=%d size=%dx%d, want %dx%d", fc.calls, fc.cols, fc.rows, cols, rows)
+	}
+
+	updated, _ := m.Update(coverMsg{
+		key: metadata.Key("Frieren"), art: fakeArt(oldCols, oldRows), cols: oldCols, rows: oldRows,
+	})
+	if entry := updated.(Model).coverArt[metadata.Key("Frieren")]; entry.cols != cols || entry.rows != rows {
+		t.Fatalf("stale %dx%d art replaced the %dx%d render", oldCols, oldRows, cols, rows)
+	}
+}
+
+func TestCoverViewerSizeFits(t *testing.T) {
+	for _, tc := range []struct{ w, h int }{{80, 24}, {100, 30}, {120, 40}, {160, 50}} {
+		m := New(nil, t.TempDir(), nil)
+		m.width, m.height = tc.w, tc.h
+		cols, rows := m.coverViewerSize()
+		if cols <= 0 || rows <= 0 {
+			t.Fatalf("%dx%d: size %dx%d", tc.w, tc.h, cols, rows)
+		}
+		if cols > m.viewWidth()-8 {
+			t.Errorf("%dx%d: %d columns overflow the panel", tc.w, tc.h, cols)
+		}
+		if rows > max(3, m.height-16) {
+			t.Errorf("%dx%d: %d rows overflow the panel", tc.w, tc.h, rows)
+		}
+		if rows > cols*3/4 {
+			t.Errorf("%dx%d: %dx%d art breaks the 2:3 cover ratio", tc.w, tc.h, cols, rows)
+		}
 	}
 }
 
@@ -825,7 +927,7 @@ func TestGenreNavigation(t *testing.T) {
 	fm := &fakeMeta{items: []metadata.Info{{
 		Title: "Frieren", Rating: "PG-13", Genres: []string{"Adventure"}, CoverURL: "https://img/x.jpg",
 	}}}
-	fc := &fakeCover{art: fakeArt()}
+	fc := &fakeCover{}
 	m := New(nil, t.TempDir(), nil)
 	m.meta, m.covers = fm, fc
 	m.width, m.height = 120, 40
@@ -1103,7 +1205,7 @@ func TestCoverViewerHalfBlock(t *testing.T) {
 		Title: "Frieren", Rating: "PG-13", Genres: []string{"Adventure", "Drama"},
 		Tags: []string{"Magic", "Journey"}, CoverURL: "https://img/x.jpg",
 	}
-	fc := &fakeCover{art: fakeArt()}
+	fc := &fakeCover{}
 	m := resultsModel(t, &fakeMeta{info: info}, fc)
 	m.metaCache[metadata.Key("Frieren")] = info
 
