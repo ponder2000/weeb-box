@@ -8,8 +8,10 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -43,6 +45,7 @@ const (
 	screenBusy
 	screenHelp
 	screenSettings
+	screenCover
 )
 
 const (
@@ -50,6 +53,7 @@ const (
 	settingsDir
 	settingsDatabase
 	settingsProviders
+	settingsHideAdult
 	settingsTheme
 	settingsFont
 	settingsRowCount
@@ -58,11 +62,13 @@ const (
 var qualityOptions = []string{"auto", "1080p", "720p", "480p"}
 
 const (
-	creatorURL  = "https://x.com/chotathanos"
-	creatorText = "developed by @chotathanos"
-	metaTTL     = 7 * 24 * time.Hour
-	coverCols   = 24
-	coverRows   = 10
+	creatorURL      = "https://x.com/chotathanos"
+	creatorText     = "developed by @chotathanos"
+	metaTTL         = 7 * 24 * time.Hour
+	coverCols       = 24
+	coverRows       = 10
+	coverViewWidth  = 60
+	coverViewHeight = 30
 )
 
 // metaProvider is the metadata client surface the TUI needs; tests stub it.
@@ -74,6 +80,13 @@ type metaProvider interface {
 // coverRenderer turns a cover URL into terminal art; tests stub it.
 type coverRenderer interface {
 	Render(ctx context.Context, url string, width, height int) (string, error)
+}
+
+// nativeCoverRenderer is the optional surface used for full-size inline
+// images. Renderers that do not implement it keep the half-block viewer.
+type nativeCoverRenderer interface {
+	Native() cover.NativeKind
+	RenderNative(ctx context.Context, url string, width, height int) (string, error)
 }
 
 type focus int
@@ -259,7 +272,14 @@ type Model struct {
 	coverArt     map[string]string
 	coverLoading map[string]bool
 	browseGenre  string
+	browsePage   int
 	browseLoad   bool
+
+	coverReturn   screen
+	coverInfo     metadata.Info
+	coverViewArt  string
+	coverViewLoad bool
+	hideAdult     bool
 
 	progressByURL  map[string]store.Progress
 	downloadsByNum map[int]store.Download
@@ -450,6 +470,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.quality != "" {
 			m.quality = msg.quality
 		}
+		m.hideAdult = msg.hideAdult
 		if msg.theme != "" {
 			m.theme = msg.theme
 			applyTheme(msg.theme)
@@ -520,13 +541,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case coverViewMsg:
+		m.coverViewLoad = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.coverViewArt = msg.art
+		return m, nil
+
+	case nativeCoverMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.screen = m.coverReturn
+			return m, nil
+		}
+		path := msg.path
+		cmd := exec.Command("bash", "-c", `cat "$0"; read -r -n 1 -s`, path)
+		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+			return nativeCoverDoneMsg{path: path, err: err}
+		})
+
+	case nativeCoverDoneMsg:
+		_ = os.Remove(msg.path)
+		m.screen = m.coverReturn
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.status = "Cover closed"
+		return m, nil
+
 	case browseMsg:
 		if !m.browseLoad || msg.genre != m.browseGenre {
 			return m, nil
 		}
 		m.browseLoad = false
+		m.browsePage = msg.page
 		if msg.err != nil {
 			m.screen, m.err = screenGenres, msg.err
+			return m, nil
+		}
+		if len(msg.items) == 0 {
+			m.main.SetItems(nil)
+			m.screen, m.err, m.status = screenBrowse, nil, "no more titles"
+			m.layout()
 			return m, nil
 		}
 		items := make([]list.Item, len(msg.items))
@@ -536,7 +595,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.main.SetItems(items)
 		m.main.Select(0)
-		m.screen, m.err = screenBrowse, nil
+		m.screen, m.err, m.status = screenBrowse, nil, ""
 		m.layout()
 		return m, m.ensurePreview()
 
@@ -696,7 +755,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitFor(m.dlCh)
 
 	case spinner.TickMsg:
-		if m.screen != screenBusy && !(m.screen == screenLibrary && m.libraryLoading) && !(m.screen == screenProviders && m.providerLoading) && !m.browseLoad && len(m.metaLoading) == 0 {
+		if m.screen != screenBusy && !(m.screen == screenLibrary && m.libraryLoading) && !(m.screen == screenProviders && m.providerLoading) && !m.browseLoad && !m.coverViewLoad && len(m.metaLoading) == 0 {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -745,6 +804,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.screen != screenBusy && key == "ctrl+o" {
 		return m.openSettings()
 	}
+	if key == "i" && (m.screen == screenResults || m.screen == screenBrowse || m.screen == screenEpisodes) {
+		return m.openCover()
+	}
 
 	switch m.screen {
 	case screenHome:
@@ -767,6 +829,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "esc", "left", "backspace":
 			return m.openGenres()
+		case "n", "]":
+			return m.browsePageBy(1)
+		case "p", "[":
+			return m.browsePageBy(-1)
 		case "enter":
 			selected, ok := m.main.SelectedItem().(item)
 			if !ok || selected.title == "" {
@@ -790,6 +856,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			selected, ok := m.main.SelectedItem().(item)
 			if !ok {
+				return m, nil
+			}
+			if m.adultHidden(selected) {
+				m.status = "18+ hidden by the adult filter"
 				return m, nil
 			}
 			if selected.prov == nil {
@@ -977,6 +1047,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch m.settingsRow {
 			case settingsQuality:
 				m.cycleQuality(step)
+			case settingsHideAdult:
+				if key == " " {
+					m.toggleHideAdult()
+				}
 			case settingsTheme:
 				m.cycleTheme(step)
 			}
@@ -984,6 +1058,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch m.settingsRow {
 			case settingsQuality:
 				m.cycleQuality(1)
+			case settingsHideAdult:
+				m.toggleHideAdult()
 			case settingsTheme:
 				m.cycleTheme(1)
 			case settingsDir:
@@ -1006,6 +1082,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.status = ""
 			return m, checkDepsCmd()
+		}
+		return m, nil
+
+	case screenCover:
+		switch key {
+		case "esc", "enter", "left", "backspace":
+			m.screen, m.err = m.coverReturn, nil
+			m.layout()
 		}
 		return m, nil
 
@@ -1203,11 +1287,47 @@ func (m Model) startBrowse(genre string) (tea.Model, tea.Cmd) {
 		m.err = fmt.Errorf("metadata client unavailable")
 		return m, nil
 	}
-	m.browseGenre, m.browseLoad = genre, true
+	m.browseGenre, m.browsePage, m.browseLoad = genre, 1, true
 	m.screen, m.err, m.status = screenBrowse, nil, ""
 	m.main.SetItems(nil)
 	m.layout()
 	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, genre, 1))
+}
+
+// browsePageBy moves the genre browse one page forward or back.
+func (m Model) browsePageBy(step int) (tea.Model, tea.Cmd) {
+	if m.meta == nil || m.browseLoad || m.browseGenre == "" {
+		return m, nil
+	}
+	page := m.browsePage + step
+	if page < 1 {
+		return m, nil
+	}
+	m.browsePage, m.browseLoad = page, true
+	m.err, m.status = nil, fmt.Sprintf("Loading page %d…", page)
+	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, m.browseGenre, page))
+}
+
+// toggleHideAdult flips the adult filter and persists it.
+func (m *Model) toggleHideAdult() {
+	m.hideAdult = !m.hideAdult
+	if m.st == nil {
+		return
+	}
+	value := "no"
+	if m.hideAdult {
+		value = "yes"
+	}
+	_ = m.st.SetSetting(context.Background(), "hide_adult", value)
+}
+
+// adultHidden reports whether the selected item is blocked by the adult filter.
+func (m Model) adultHidden(selected item) bool {
+	if !m.hideAdult {
+		return false
+	}
+	info, ok := m.metaCache[metadata.Key(previewTitle(selected))]
+	return ok && info.Adult
 }
 
 // ensureMeta starts a lookup for title unless it is cached, failing, or already
@@ -1242,6 +1362,56 @@ func (m *Model) ensureCover(info metadata.Info) tea.Cmd {
 	}
 	m.coverLoading[key] = true
 	return coverCmd(m.covers, key, info.CoverURL)
+}
+
+// coverSelection resolves the metadata for the item the cover key applies to.
+func (m Model) coverSelection() (metadata.Info, bool) {
+	if m.screen == screenEpisodes {
+		info, ok := m.metaCache[metadata.Key(m.anime.Title)]
+		return info, ok
+	}
+	selected, ok := m.main.SelectedItem().(item)
+	if !ok {
+		return metadata.Info{}, false
+	}
+	info, ok := m.metaCache[metadata.Key(previewTitle(selected))]
+	return info, ok
+}
+
+// nativeCover reports the renderer to use for a full-size inline image and
+// whether the native viewer is available.
+func nativeCover(covers coverRenderer) (nativeCoverRenderer, bool) {
+	native, ok := covers.(nativeCoverRenderer)
+	if !ok || runtime.GOOS == "windows" || native.Native() == cover.NativeNone {
+		return nil, false
+	}
+	return native, true
+}
+
+// openCover shows the selected title's cover: inline through the terminal's
+// own protocol when available, otherwise as half-block art.
+func (m Model) openCover() (tea.Model, tea.Cmd) {
+	if m.covers == nil {
+		m.status = "Cover renderer unavailable"
+		return m, nil
+	}
+	info, ok := m.coverSelection()
+	if !ok || info.CoverURL == "" {
+		m.status = "No cover loaded yet"
+		return m, nil
+	}
+	if m.hideAdult && info.Adult {
+		m.status = "18+ hidden by the adult filter"
+		return m, nil
+	}
+	m.coverReturn, m.coverInfo, m.coverViewArt = m.screen, info, ""
+	if native, ok := nativeCover(m.covers); ok {
+		m.status = "Loading cover…"
+		return m, nativeCoverCmd(native, info.CoverURL)
+	}
+	m.screen, m.coverViewLoad, m.status = screenCover, true, ""
+	m.layout()
+	return m, tea.Batch(m.spinner.Tick, coverViewCmd(m.covers, info.CoverURL))
 }
 
 // ensurePreview loads metadata (or just the cover) for the selected list item.
@@ -1300,6 +1470,9 @@ func (m Model) compactMeta(selected item) string {
 	}
 	key := metadata.Key(title)
 	if info, ok := m.metaCache[key]; ok {
+		if m.hideAdult && info.Adult {
+			return errStyle.Render("18+ hidden")
+		}
 		parts := []string{ratingBadge(info)}
 		if len(info.Genres) > 0 {
 			parts = append(parts, strings.Join(info.Genres[:min(3, len(info.Genres))], ", "))
@@ -1327,6 +1500,9 @@ func (m Model) previewBody(selected item, width int) string {
 		return dimStyle.Render("No metadata for " + title)
 	}
 	var lines []string
+	if m.hideAdult && info.Adult {
+		return errStyle.Render("18+ hidden")
+	}
 	// Covers are cached under the resolved title, which may differ from the
 	// search title that produced the metadata entry.
 	if art := m.coverArt[metadata.Key(info.Title)]; art != "" {
@@ -1798,6 +1974,8 @@ func (m Model) bodyView() string {
 		body = m.helpView()
 	case screenSettings:
 		body = m.settingsView()
+	case screenCover:
+		body = m.coverView()
 	}
 	if m.err != nil {
 		body += "\n" + errStyle.MaxWidth(max(10, m.viewWidth()-2)).Render("error: "+strings.SplitN(m.err.Error(), "\n", 2)[0])
@@ -1863,6 +2041,8 @@ func (m Model) screenName() string {
 		return "help"
 	case screenSettings:
 		return "settings"
+	case screenCover:
+		return "cover"
 	default:
 		return ""
 	}
@@ -1880,11 +2060,11 @@ func (m Model) footer() string {
 	case screenGenres:
 		items = []string{hint("enter", "browse genre"), hint("esc", "back")}
 	case screenBrowse:
-		items = []string{hint("enter", "search title"), hint("esc", "genres")}
+		items = []string{hint("enter", "search title"), hint("n/p", "page"), hint("i", "cover"), hint("esc", "genres")}
 	case screenResults:
-		items = []string{hint("↑↓", "move"), hint("enter", "episodes"), hint("ctrl+b", "browse"), hint("esc", "back")}
+		items = []string{hint("↑↓", "move"), hint("enter", "episodes"), hint("i", "cover"), hint("ctrl+b", "browse"), hint("esc", "back")}
 	case screenEpisodes:
-		items = []string{hint("enter", "play"), hint("d", "download"), hint("a", "rest"), hint("v", "queue"), hint("esc", "back")}
+		items = []string{hint("enter", "play"), hint("d", "download"), hint("a", "rest"), hint("i", "cover"), hint("v", "queue"), hint("esc", "back")}
 	case screenDownloads:
 		items = []string{hint("x", "cancel"), hint("r", "retry"), hint("o", "folder"), hint("esc", "back")}
 	case screenLibrary:
@@ -1903,6 +2083,8 @@ func (m Model) footer() string {
 		} else {
 			items = []string{hint("↑↓", "row"), hint("space", "cycle"), hint("enter", "edit"), hint("esc", "back")}
 		}
+	case screenCover:
+		items = []string{hint("esc", "back")}
 	}
 	sep := dimStyle.Render("  ·  ")
 	fixed := ""
@@ -2058,18 +2240,19 @@ func (m Model) genresView() string {
 func (m Model) browseView() string {
 	content := m.viewWidth()
 	inner := content - 4
+	title := m.browseLabel()
 	if m.browseLoad {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.crumbs("Home", "browse", m.browseGenre),
 			"",
-			panel("Popular", m.spinner.View()+" Loading "+m.browseGenre+"…", inner, true),
+			panel(title, m.spinner.View()+" Loading "+m.browseGenre+"…", inner, true),
 		)
 	}
 	if len(m.main.Items()) == 0 {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.crumbs("Home", "browse", m.browseGenre),
 			"",
-			panel("Popular", dimStyle.Render("No titles for this genre."), inner, true),
+			panel(title, dimStyle.Render("No titles on this page."), inner, true),
 		)
 	}
 	selected, _ := m.main.SelectedItem().(item)
@@ -2079,7 +2262,7 @@ func (m Model) browseView() string {
 			m.crumbs("Home", "browse", m.browseGenre),
 			"",
 			lipgloss.JoinHorizontal(lipgloss.Top,
-				panel("Popular", m.main.View(), max(10, leftOuter-2), true),
+				panel(title, m.main.View(), max(10, leftOuter-2), true),
 				"  ",
 				panel("Preview", m.previewBody(selected, coverCols), coverCols+2, false),
 			),
@@ -2088,12 +2271,61 @@ func (m Model) browseView() string {
 	parts := []string{
 		m.crumbs("Home", "browse", m.browseGenre),
 		"",
-		panel("Popular", m.main.View(), inner, true),
+		panel(title, m.main.View(), inner, true),
 	}
 	if line := m.compactMeta(selected); line != "" {
 		parts = append(parts, "", dimStyle.MaxWidth(content-2).Render(line))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// browseLabel is the Popular panel title, including the current page.
+func (m Model) browseLabel() string {
+	page := m.browsePage
+	if page < 1 {
+		page = 1
+	}
+	return fmt.Sprintf("Popular · page %d", page)
+}
+
+// coverView is the half-block full-screen cover with its metadata.
+func (m Model) coverView() string {
+	content := m.viewWidth()
+	inner := content - 4
+	if m.coverViewLoad {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.crumbs("Home", "cover"),
+			"",
+			panel("Cover", m.spinner.View()+" Loading cover…", inner, true),
+		)
+	}
+	// Keep the art inside what is left after the header, footer, crumbs,
+	// metadata lines and the status row.
+	artWidth := max(10, min(coverViewWidth, inner-4))
+	artHeight := min(coverViewHeight, max(3, m.height-16))
+	art := lipgloss.NewStyle().MaxWidth(artWidth).MaxHeight(artHeight).Render(strings.TrimRight(m.coverViewArt, "\n"))
+	name := m.coverInfo.Title
+	if name == "" {
+		name = "Cover"
+	}
+	lines := []string{art, "", lipgloss.NewStyle().Bold(true).Foreground(colorText).MaxWidth(inner - 2).Render(name)}
+	badge := ratingBadge(m.coverInfo)
+	if m.coverInfo.Adult {
+		lines = append(lines, errStyle.Render(badge))
+	} else {
+		lines = append(lines, dimStyle.Render(badge))
+	}
+	if len(m.coverInfo.Genres) > 0 {
+		lines = append(lines, dimStyle.MaxWidth(inner-2).Render(strings.Join(m.coverInfo.Genres, " · ")))
+	}
+	if len(m.coverInfo.Tags) > 0 {
+		lines = append(lines, faintStyle.MaxWidth(inner-2).Render(strings.Join(m.coverInfo.Tags[:min(5, len(m.coverInfo.Tags))], " · ")))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.crumbs("Home", "cover"),
+		"",
+		panel("Cover", strings.Join(lines, "\n"), inner, true),
+	)
 }
 
 func (m Model) episodesView() string {
@@ -2300,6 +2532,7 @@ func (m Model) settingsView() string {
 		{"Download directory", dirValue, dirNote},
 		{"Database", dbPath, "-db requires restart"},
 		{"Providers", fmt.Sprintf("%d/%d enabled", enabled, len(m.providers)), "ctrl+p providers"},
+		{"Hide adult", yesNo(m.hideAdult), "space / enter toggle"},
 		{"Color theme", themeLabel(m.theme), "space / ← → cycle"},
 		{"Font", "terminal setting", "IBM Plex Mono recommended"},
 	}
@@ -2452,6 +2685,7 @@ func (m Model) helpView() string {
 		keyline("ctrl+p", "providers"),
 		keyline("ctrl+o", "settings"),
 		keyline("ctrl+l", "downloaded library"),
+		keyline("i", "view cover"),
 	}, "\n")
 	mediaKeys := strings.Join([]string{
 		keyline("enter", "play online"),
@@ -2685,9 +2919,10 @@ func providerStateCmd(st *store.Store) tea.Cmd {
 }
 
 type settingsMsg struct {
-	quality string
-	theme   string
-	err     error
+	quality   string
+	theme     string
+	hideAdult bool
+	err       error
 }
 
 type metaMsg struct {
@@ -2700,6 +2935,21 @@ type coverMsg struct {
 	key string
 	art string
 	err error
+}
+
+type coverViewMsg struct {
+	art string
+	err error
+}
+
+type nativeCoverMsg struct {
+	path string
+	err  error
+}
+
+type nativeCoverDoneMsg struct {
+	path string
+	err  error
 }
 
 type browseMsg struct {
@@ -2747,6 +2997,50 @@ func coverCmd(covers coverRenderer, key, url string) tea.Cmd {
 	}
 }
 
+// coverViewCmd renders the full-screen half-block cover.
+func coverViewCmd(covers coverRenderer, url string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		art, err := covers.Render(ctx, url, coverViewWidth, coverViewHeight)
+		return coverViewMsg{art: art, err: err}
+	}
+}
+
+// nativeCoverCmd renders the inline escape and stages it in a temp file for
+// the viewer process to cat.
+func nativeCoverCmd(covers nativeCoverRenderer, url string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		escape, err := covers.RenderNative(ctx, url, coverViewWidth, coverViewHeight)
+		if err != nil {
+			return nativeCoverMsg{err: err}
+		}
+		file, err := os.CreateTemp("", "weeb-box-cover-*.esc")
+		if err != nil {
+			return nativeCoverMsg{err: err}
+		}
+		_, writeErr := file.WriteString(escape)
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil {
+			_ = os.Remove(file.Name())
+			if writeErr != nil {
+				return nativeCoverMsg{err: writeErr}
+			}
+			return nativeCoverMsg{err: closeErr}
+		}
+		return nativeCoverMsg{path: file.Name()}
+	}
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
 func browseCmd(meta metaProvider, genre string, page int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2768,7 +3062,11 @@ func loadSettingsCmd(st *store.Store) tea.Cmd {
 			return settingsMsg{err: err}
 		}
 		theme, err := st.GetSetting(ctx, "theme", "carbon-dark")
-		return settingsMsg{quality: quality, theme: theme, err: err}
+		if err != nil {
+			return settingsMsg{err: err}
+		}
+		hideAdult, err := st.GetSetting(ctx, "hide_adult", "no")
+		return settingsMsg{quality: quality, theme: theme, hideAdult: hideAdult == "yes", err: err}
 	}
 }
 

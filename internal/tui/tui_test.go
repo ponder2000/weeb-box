@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"github.com/ponder2000/weeb-box/internal/cover"
 	"github.com/ponder2000/weeb-box/internal/deps"
 	lib "github.com/ponder2000/weeb-box/internal/library"
 	"github.com/ponder2000/weeb-box/internal/metadata"
@@ -134,6 +136,24 @@ func (f *fakeCover) Render(context.Context, string, int, int) (string, error) {
 	return f.art, nil
 }
 
+// fakeNativeCover also advertises a native image protocol.
+type fakeNativeCover struct {
+	fakeCover
+	kind        cover.NativeKind
+	nativeCalls int
+}
+
+func (f *fakeNativeCover) Native() cover.NativeKind { return f.kind }
+
+func (f *fakeNativeCover) RenderNative(context.Context, string, int, int) (string, error) {
+	f.nativeCalls++
+	return "\x1b]1337;File=inline=1:AAAA\x07", nil
+}
+
+func runeKey(r rune) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+}
+
 func fakeArt() string {
 	rows := make([]string, coverRows)
 	for i := range rows {
@@ -153,7 +173,7 @@ func runCmd(t *testing.T, m Model, cmd tea.Cmd) Model {
 				m = runCmd(t, m, c)
 			}
 			return m
-		case metaMsg, coverMsg, browseMsg, searchMsg, episodesMsg:
+		case metaMsg, coverMsg, browseMsg, searchMsg, episodesMsg, coverViewMsg:
 			updated, next := m.Update(msg)
 			m, cmd = updated.(Model), next
 		default:
@@ -163,7 +183,7 @@ func runCmd(t *testing.T, m Model, cmd tea.Cmd) Model {
 	return m
 }
 
-func resultsModel(t *testing.T, fm *fakeMeta, fc *fakeCover) Model {
+func resultsModel(t *testing.T, fm *fakeMeta, fc coverRenderer) Model {
 	t.Helper()
 	m := New(nil, t.TempDir(), nil)
 	m.meta, m.covers = fm, fc
@@ -360,6 +380,12 @@ func TestViewFitsTerminal(t *testing.T) {
 					`mkdir -p "/Users/example/.config/mpv/script-opts"`,
 					`cp "/Users/example/weeb-box/themes/mpv/uosc.conf" "/Users/example/.config/mpv/script-opts/uosc.conf"`,
 				}}
+			},
+			"cover": func() {
+				m.screen = screenCover
+				m.coverInfo = info
+				m.coverViewArt = fakeArt()
+				m.coverViewLoad = false
 			},
 		}
 		for name, setup := range views {
@@ -906,5 +932,205 @@ func TestBrowseErrorIsFatal(t *testing.T) {
 	}
 	if m.screen != screenGenres {
 		t.Fatalf("screen = %v", m.screen)
+	}
+}
+
+func TestBrowsePagination(t *testing.T) {
+	items := []metadata.Info{{Title: "Frieren", Rating: "PG-13"}}
+	fm := &fakeMeta{items: items}
+	m := New(nil, t.TempDir(), nil)
+	m.meta = fm
+	m.width, m.height = 80, 24
+	m.screen, m.browseGenre, m.browsePage = screenBrowse, "Drama", 1
+	m.main.SetItems([]list.Item{item{title: "Frieren", info: items[0]}})
+	m.main.Select(0)
+
+	updated, cmd := m.handleKey(runeKey('n'))
+	m = updated.(Model)
+	if m.browsePage != 2 || !m.browseLoad {
+		t.Fatalf("page=%d loading=%v", m.browsePage, m.browseLoad)
+	}
+	m = runCmd(t, m, cmd)
+	if fm.page != 2 || fm.genre != "Drama" {
+		t.Fatalf("browse page=%d genre=%q", fm.page, fm.genre)
+	}
+	if !strings.Contains(m.View(), "Popular · page 2") {
+		t.Error("browse view is missing the page in its title")
+	}
+
+	updated, cmd = m.handleKey(runeKey('['))
+	m = runCmd(t, updated.(Model), cmd)
+	if fm.page != 1 {
+		t.Fatalf("previous page = %d", fm.page)
+	}
+
+	// An empty page keeps the browse screen and reports it.
+	fm.items = nil
+	updated, cmd = m.handleKey(runeKey(']'))
+	m = runCmd(t, updated.(Model), cmd)
+	if m.screen != screenBrowse || !strings.Contains(m.View(), "no more titles") {
+		t.Fatalf("empty page: screen=%v", m.screen)
+	}
+	if m.browsePage != 2 {
+		t.Fatalf("empty page = %d", m.browsePage)
+	}
+}
+
+func TestHideAdultSetting(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "adult.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	m := New(nil, t.TempDir(), st)
+	if m.hideAdult {
+		t.Fatal("adult titles should be visible by default")
+	}
+	if loadSettingsCmd(st)().(settingsMsg).hideAdult {
+		t.Fatal("hide_adult defaulted to on")
+	}
+
+	m.screen, m.settingsRow = screenSettings, settingsHideAdult
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
+	got := updated.(Model)
+	if !got.hideAdult {
+		t.Fatal("space did not enable the filter")
+	}
+	if saved, _ := st.GetSetting(context.Background(), "hide_adult", ""); saved != "yes" {
+		t.Fatalf("stored hide_adult = %q", saved)
+	}
+	if !loadSettingsCmd(st)().(settingsMsg).hideAdult {
+		t.Fatal("hide_adult was not reloaded")
+	}
+
+	updated, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.(Model).hideAdult {
+		t.Fatal("enter did not disable the filter")
+	}
+	if saved, _ := st.GetSetting(context.Background(), "hide_adult", ""); saved != "no" {
+		t.Fatalf("stored hide_adult = %q", saved)
+	}
+
+	updated, _ = m.Update(settingsMsg{hideAdult: true})
+	if !updated.(Model).hideAdult {
+		t.Fatal("settingsMsg did not apply hide_adult")
+	}
+}
+
+func TestAdultFilterBlocksEnter(t *testing.T) {
+	info := metadata.Info{Title: "Frieren", Adult: true, CoverURL: "https://img/x.jpg"}
+	m := resultsModel(t, &fakeMeta{info: info}, &fakeCover{})
+	m.metaCache[metadata.Key("Frieren")] = info
+
+	if !strings.Contains(m.View(), "18+") {
+		t.Fatal("adult badge is hidden by default")
+	}
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := updated.(Model); got.screen != screenBusy || got.busy != busyEpisodes {
+		t.Fatalf("default enter: screen=%v busy=%v", got.screen, got.busy)
+	}
+
+	m = resultsModel(t, &fakeMeta{info: info}, &fakeCover{})
+	m.metaCache[metadata.Key("Frieren")] = info
+	m.hideAdult = true
+	if !strings.Contains(m.View(), "18+ hidden") {
+		t.Fatal("preview does not hide the adult title")
+	}
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+	if got.screen != screenResults || cmd != nil {
+		t.Fatalf("blocked enter: screen=%v cmd=%v", got.screen, cmd != nil)
+	}
+	if !strings.Contains(got.status, "adult filter") {
+		t.Fatalf("status = %q", got.status)
+	}
+
+	updated, cmd = got.handleKey(runeKey('i'))
+	got = updated.(Model)
+	if got.screen != screenResults || cmd != nil || !strings.Contains(got.status, "adult filter") {
+		t.Fatalf("adult cover: screen=%v status=%q", got.screen, got.status)
+	}
+}
+
+func TestCoverViewerHalfBlock(t *testing.T) {
+	info := metadata.Info{
+		Title: "Frieren", Rating: "PG-13", Genres: []string{"Adventure", "Drama"},
+		Tags: []string{"Magic", "Journey"}, CoverURL: "https://img/x.jpg",
+	}
+	fc := &fakeCover{art: fakeArt()}
+	m := resultsModel(t, &fakeMeta{info: info}, fc)
+	m.metaCache[metadata.Key("Frieren")] = info
+
+	updated, cmd := m.handleKey(runeKey('i'))
+	m = updated.(Model)
+	if m.screen != screenCover || !m.coverViewLoad || m.coverReturn != screenResults {
+		t.Fatalf("screen=%v loading=%v return=%v", m.screen, m.coverViewLoad, m.coverReturn)
+	}
+	m = runCmd(t, m, cmd)
+	if m.coverViewArt == "" || m.coverViewLoad {
+		t.Fatal("cover art was not loaded")
+	}
+	if !strings.Contains(m.View(), "PG-13") || !strings.Contains(m.View(), "Adventure") {
+		t.Error("cover view is missing its metadata")
+	}
+
+	for _, size := range []struct{ w, h int }{{80, 24}, {120, 40}} {
+		m.width, m.height = size.w, size.h
+		m.layout()
+		view := m.View()
+		if got := lipgloss.Height(view); got > size.h {
+			t.Errorf("%dx%d: height %d", size.w, size.h, got)
+		}
+		for i, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got > size.w {
+				t.Errorf("%dx%d: line %d width %d", size.w, size.h, i+1, got)
+			}
+		}
+	}
+
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model); got.screen != screenResults {
+		t.Fatalf("esc left the viewer on %v", got.screen)
+	}
+}
+
+func TestNativeCoverDecision(t *testing.T) {
+	if _, ok := nativeCover(&fakeCover{}); ok {
+		t.Fatal("half-block renderer chose the native viewer")
+	}
+	if _, ok := nativeCover(&fakeNativeCover{kind: cover.NativeNone}); ok {
+		t.Fatal("NativeNone chose the native viewer")
+	}
+	native := &fakeNativeCover{kind: cover.NativeITerm2}
+	if runtime.GOOS == "windows" {
+		if _, ok := nativeCover(native); ok {
+			t.Fatal("windows chose the native viewer")
+		}
+		return
+	}
+	if _, ok := nativeCover(native); !ok {
+		t.Fatal("native renderer fell back to half blocks")
+	}
+
+	info := metadata.Info{Title: "Frieren", CoverURL: "https://img/x.jpg"}
+	m := resultsModel(t, &fakeMeta{info: info}, native)
+	m.metaCache[metadata.Key("Frieren")] = info
+	updated, cmd := m.openCover()
+	if got := updated.(Model); got.screen != screenResults || cmd == nil {
+		t.Fatalf("native viewer: screen=%v cmd=%v", got.screen, cmd != nil)
+	}
+
+	msg := cmd().(nativeCoverMsg)
+	if msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	defer os.Remove(msg.path)
+	staged, err := os.ReadFile(msg.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(staged), "\x1b]1337;") {
+		t.Fatalf("staged escape = %q", staged)
 	}
 }

@@ -50,13 +50,13 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 | ------- | ---- |
 | home — search focused | type a query, `enter` search, `tab`/`↓` move to lists, `esc` quit |
 | home — continue watching / recent searches | `↑`/`↓` move, `tab` next list, `enter` resume or re-run search, `esc` or `/` back to search box, `ctrl+r` clear search history (recent searches only), `q` quit |
-| results | `↑`/`↓` move, `enter` open episodes, `v` view download queue, `esc` home |
-| episodes | `↑`/`↓` move, `enter` play, `d` download selected, `a` download from selected to the end, `v` view queue, `esc` back |
+| results | `↑`/`↓` move, `enter` open episodes, `i` view cover, `v` view download queue, `esc` home |
+| episodes | `↑`/`↓` move, `enter` play, `d` download selected, `a` download from selected to the end, `i` view cover, `v` view queue, `esc` back |
 | downloads | `x` cancel, `r` retry last failed episode, `o` open folder, `esc` back |
 | library | `↑`/`↓` move, `enter` play the local file, `o` open folder, `r` rescan, `esc` home |
 | providers | `space`/`enter` enable or disable, `r` refresh status, `esc` back |
-| browse | `↑`/`↓` genre or title, `enter` drill in/search providers, `esc` back |
-| settings | `↑`/`↓` row, `space`/`←`/`→` cycle quality or theme, `enter` edit download dir, `esc` back |
+| browse | `↑`/`↓` genre or title, `n`/`]` next page, `p`/`[` previous page, `i` view cover, `enter` drill in/search providers, `esc` back |
+| settings | `↑`/`↓` row, `space`/`←`/`→` cycle quality or theme, `space`/`enter` toggle Hide adult, `enter` edit download dir, `esc` back |
 | setup | `r` recheck dependencies, `enter`/`esc` continue |
 
 Only one download job runs at a time; starting a queue stops at the first failure. `r` retries only the last failed episode, not a cancelled queue.
@@ -124,9 +124,16 @@ cover rendered as colored half-blocks; low-color terminals fall back to ASCII.
 Narrower terminals keep the compact rating/genres line, and the episode detail
 pane shows rating, genres, and tags.
 
+Press `i` on Results, Browse, or Episodes to open the selected title's cover.
+iTerm2 and Kitty draw it inline through their own image protocol; other
+terminals get a 60x30 half-block viewer with title, rating, genres, and tags
+(`esc`/`enter` back).
+
 `ctrl+b` opens **Browse by genre**. Pick a genre, then a title, and the normal
-multi-provider search runs for that title. AniList browse is non-adult;
-search results are not filtered by rating.
+multi-provider search runs for that title. `n`/`]` and `p`/`[` page through the
+popular list; an empty page reports "no more titles". AniList browse is
+non-adult; search results are not filtered by rating unless **Hide adult** is
+enabled in Settings.
 
 ## Settings
 
@@ -136,6 +143,7 @@ search results are not filtered by rating.
 - **Download directory** — editable and persisted. `-dir` overrides it for that run; existing files are not moved.
 - **Database** — shows the active SQLite path. Changing it requires restarting with `-db`.
 - **Providers** — enabled/total count; press `ctrl+p` to choose which sources search uses.
+- **Hide adult** — yes/no. Off by default, so `18+` badges show normally. When on, an adult result's preview reads "18+ hidden" and `enter`/`i` refuse to open it. Provider results are never filtered ahead of time.
 - **Color theme** — Carbon Dark, Carbon Light, Tokyo Night, or Mono. This changes TUI colors; the font remains a terminal setting (IBM Plex Mono recommended).
 
 The selected quality applies to playback and downloads. The database and download paths are shown in the help screen too.
