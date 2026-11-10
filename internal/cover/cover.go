@@ -4,11 +4,12 @@ package cover
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"io"
 	"net/http"
 	"os"
@@ -25,13 +26,48 @@ const (
 	asciiRamp     = " .:-=+*#%@"
 )
 
+// NativeKind is a terminal inline-image protocol.
+type NativeKind int
+
+const (
+	NativeNone   NativeKind = iota // no native protocol; use Render
+	NativeITerm2                   // iTerm2 OSC 1337 File
+	NativeKitty                    // Kitty graphics protocol
+)
+
 // Renderer fetches and renders covers. Set TrueColor to override terminal
 // detection after New.
 type Renderer struct {
 	HTTP      *http.Client
 	TrueColor bool
+	native    NativeKind
+	nativeSet bool
 	cache     map[string]string
 	mu        sync.Mutex
+}
+
+// SetNative forces a native protocol, including NativeNone, instead of
+// detecting it from the environment.
+func (r *Renderer) SetNative(k NativeKind) {
+	r.native, r.nativeSet = k, true
+}
+
+// Native reports the protocol used by RenderNative. Precedence: an explicit
+// SetNative value, then Kitty (KITTY_WINDOW_ID or TERM=xterm-kitty), then
+// iTerm2 (TERM_PROGRAM=iTerm.app or LC_TERMINAL=iTerm2), then NativeNone.
+func (r *Renderer) Native() NativeKind {
+	if r.nativeSet {
+		return r.native
+	}
+	if os.Getenv("KITTY_WINDOW_ID") != "" ||
+		strings.Contains(strings.ToLower(os.Getenv("TERM")), "xterm-kitty") {
+		return NativeKitty
+	}
+	if strings.EqualFold(os.Getenv("TERM_PROGRAM"), "iTerm.app") ||
+		strings.EqualFold(os.Getenv("LC_TERMINAL"), "iTerm2") {
+		return NativeITerm2
+	}
+	return NativeNone
 }
 
 // New returns a Renderer with a 15s client and truecolor detected from
@@ -85,6 +121,65 @@ func (r *Renderer) Render(ctx context.Context, url string, width, height int) (s
 	r.cache[key] = out
 	r.mu.Unlock()
 	return out, nil
+}
+
+// RenderNative returns an escape sequence that draws the image at url inline
+// through the terminal's own image protocol. width/height are terminal cells;
+// the terminal scales the image itself, so no half-block art is produced.
+// NativeNone is an error. Results are not cached.
+func (r *Renderer) RenderNative(ctx context.Context, url string, width, height int) (string, error) {
+	if width <= 0 || height <= 0 {
+		return "", fmt.Errorf("cover: invalid size %dx%d", width, height)
+	}
+	kind := r.Native()
+	if kind == NativeNone {
+		return "", fmt.Errorf("cover: terminal has no native image protocol")
+	}
+
+	img, err := r.fetch(ctx, url)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return "", fmt.Errorf("cover: encode: %w", err)
+	}
+	data := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	if kind == NativeITerm2 {
+		return fmt.Sprintf("\x1b]1337;File=inline=1;width=%dpx;height=%dpx;preserveAspectRatio=1:%s\x07",
+			width*8, height*16, data), nil
+	}
+	return kittyEscape(width, height, data), nil
+}
+
+// kittyEscape builds the graphics protocol command; a payload over 4096 bytes
+// must be split across chunks linked by m=1/m=0.
+func kittyEscape(width, height int, data string) string {
+	const max = 4096
+	var b strings.Builder
+	for i := 0; i < len(data); i += max {
+		end := i + max
+		if end > len(data) {
+			end = len(data)
+		}
+		last := end == len(data)
+		b.WriteString("\x1b_G")
+		if i == 0 {
+			fmt.Fprintf(&b, "a=T,f=100,c=%d,r=%d,q=2", width, height)
+			if !last {
+				b.WriteString(",m=1")
+			}
+			b.WriteByte(';')
+		} else if last {
+			b.WriteString("m=0;")
+		} else {
+			b.WriteString("m=1;")
+		}
+		b.WriteString(data[i:end])
+		b.WriteString("\x1b\\")
+	}
+	return b.String()
 }
 
 func (r *Renderer) fetch(ctx context.Context, url string) (image.Image, error) {
