@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -54,6 +55,7 @@ const (
 	settingsDatabase
 	settingsProviders
 	settingsHideAdult
+	settingsAutoplay
 	settingsTheme
 	settingsFont
 	settingsRowCount
@@ -462,6 +464,7 @@ type Model struct {
 	coverViewArt  string
 	coverViewLoad bool
 	hideAdult     bool
+	autoplay      bool
 
 	progressByURL  map[string]store.Progress
 	downloadsByNum map[int]store.Download
@@ -484,6 +487,8 @@ type Model struct {
 
 	player     *media.Player
 	playCancel context.CancelFunc
+	playInfo   playbackInfo
+	playProg   *playProgress
 
 	queue          []*queueItem
 	downloading    bool
@@ -496,6 +501,8 @@ type Model struct {
 
 	status string
 	err    error
+
+	quitting bool
 }
 
 func New(providers []provider.Provider, outDir string, st *store.Store) Model {
@@ -550,6 +557,7 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 		scroll:         scroll,
 		quality:        "auto",
 		theme:          "carbon-dark",
+		autoplay:       true,
 		dirInput:       dirInput,
 		width:          80,
 		height:         24,
@@ -653,6 +661,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quality = msg.quality
 		}
 		m.hideAdult = msg.hideAdult
+		m.autoplay = msg.autoplay
 		if msg.theme != "" {
 			m.theme = msg.theme
 			applyTheme(msg.theme)
@@ -915,6 +924,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}, msg.start)
 
 	case playbackDoneMsg:
+		code := media.ExitCode(msg.err)
+		// A quit near the end must not autoplay into a new window.
+		finished := m.playProg != nil && m.playProg.finished() && !m.quitting
 		if m.playCancel != nil {
 			m.playCancel()
 			m.playCancel = nil
@@ -924,9 +936,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.player = nil
 		}
 		m.screen = m.playReturn
-		if msg.err != nil {
+		switch {
+		case code == media.ExitNext || code == media.ExitPrev:
+			step := 1
+			if code == media.ExitPrev {
+				step = -1
+			}
+			if ep, ok := m.siblingEpisode(m.playInfo, step); ok {
+				return m.playEpisode(ep)
+			}
+			m.status = "No next episode"
+			if step < 0 {
+				m.status = "No previous episode"
+			}
+		case msg.err != nil:
 			m.err = msg.err
-		} else {
+		case finished:
+			m.saveFinishedProgress()
+			if m.autoplay {
+				if ep, ok := m.siblingEpisode(m.playInfo, 1); ok {
+					return m.playEpisode(ep)
+				}
+			}
+			m.status = "Playback ended"
+		default:
 			m.status = "Playback ended"
 		}
 		if m.playReturn == screenHome {
@@ -998,6 +1031,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // quit stops background work so the player and downloads do not outlive the TUI.
 func (m Model) quit() tea.Cmd {
+	m.quitting = true
 	if m.cancelDownload != nil {
 		m.cancelDownload()
 	}
@@ -1297,6 +1331,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if key == " " {
 					m.toggleHideAdult()
 				}
+			case settingsAutoplay:
+				if key == " " {
+					m.toggleAutoplay()
+				}
 			case settingsTheme:
 				m.cycleTheme(step)
 			}
@@ -1306,6 +1344,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.cycleQuality(1)
 			case settingsHideAdult:
 				m.toggleHideAdult()
+			case settingsAutoplay:
+				m.toggleAutoplay()
 			case settingsTheme:
 				m.cycleTheme(1)
 			case settingsDir:
@@ -1604,6 +1644,19 @@ func (m *Model) toggleHideAdult() {
 		value = "yes"
 	}
 	_ = m.st.SetSetting(context.Background(), "hide_adult", value)
+}
+
+// toggleAutoplay flips episode autoplay and persists it.
+func (m *Model) toggleAutoplay() {
+	m.autoplay = !m.autoplay
+	if m.st == nil {
+		return
+	}
+	value := "no"
+	if m.autoplay {
+		value = "yes"
+	}
+	_ = m.st.SetSetting(context.Background(), "autoplay", value)
 }
 
 // adultHidden reports whether the selected item is blocked by the adult filter.
@@ -2137,7 +2190,11 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 		m.err = fmt.Errorf("a player is already open")
 		return m, nil
 	}
-	m.player = player
+	m.player, m.playInfo = player, info
+	// The goroutine below cannot touch copied Model fields, so it reports
+	// through a shared pointer.
+	prog := &playProgress{}
+	m.playProg = prog
 	ctx, cancel := context.WithCancel(context.Background())
 	m.playCancel = cancel
 	if m.st != nil {
@@ -2159,6 +2216,7 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 		return m, nil
 	}
 	go player.WatchProgress(ctx, func(position, duration float64) {
+		prog.set(position, duration)
 		if m.st == nil {
 			return
 		}
@@ -2171,7 +2229,7 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 			Position: position, Duration: duration,
 		})
 	})
-	m.status = "Playing in mpv — TUI stays; close the player to return"
+	m.status = "Playing in mpv — TUI stays; >/< or n/p next/prev"
 	return m, func() tea.Msg {
 		err := player.Wait()
 		if ctx.Err() != nil {
@@ -2180,6 +2238,78 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 		}
 		return playbackDoneMsg{err: err}
 	}
+}
+
+// playProgress shares the live mpv position with the TUI: the Model is copied
+// by value, the pointer is not.
+type playProgress struct {
+	mu       sync.Mutex
+	pos, dur float64
+	ok       bool
+}
+
+func (p *playProgress) set(position, duration float64) {
+	p.mu.Lock()
+	p.pos, p.dur, p.ok = position, duration, duration > 0
+	p.mu.Unlock()
+}
+
+// finished reports a natural end; a quit shortly before the credits does not
+// count.
+func (p *playProgress) finished() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ok && p.pos >= p.dur-15
+}
+
+func (p *playProgress) duration() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.dur
+}
+
+// siblingEpisode returns the episode before or after info in the current list.
+// It refuses lists that belong to another anime, so next/prev does nothing when
+// playback was resumed from Home.
+func (m Model) siblingEpisode(info playbackInfo, step int) (provider.Episode, bool) {
+	if m.prov == nil || m.anime.URL != info.AnimeURL || len(m.episodes) == 0 {
+		return provider.Episode{}, false
+	}
+	for i, ep := range m.episodes {
+		if ep.URL != info.EpisodeURL {
+			continue
+		}
+		if next := i + step; next >= 0 && next < len(m.episodes) {
+			return m.episodes[next], true
+		}
+		return provider.Episode{}, false
+	}
+	return provider.Episode{}, false
+}
+
+// playEpisode resolves and starts an episode from the current list.
+func (m Model) playEpisode(ep provider.Episode) (tea.Model, tea.Cmd) {
+	m.screen, m.busy, m.err = screenBusy, busyStream, nil
+	m.status = fmt.Sprintf("Loading E%03d…", ep.Number)
+	return m, tea.Batch(m.spinner.Tick, streamCmd(m.st, m.prov, m.anime, ep))
+}
+
+// saveFinishedProgress records a finished episode at position 0 so Continue
+// watching does not offer its last seconds.
+func (m Model) saveFinishedProgress() {
+	if m.st == nil {
+		return
+	}
+	info := m.playInfo
+	duration := info.Duration
+	if duration <= 0 && m.playProg != nil {
+		duration = m.playProg.duration()
+	}
+	_ = m.st.SaveProgress(context.Background(), store.Progress{
+		Provider: info.Provider, EpisodeURL: info.EpisodeURL, AnimeURL: info.AnimeURL,
+		AnimeTitle: info.AnimeTitle, EpisodeNumber: info.EpisodeNumber,
+		Position: 0, Duration: duration,
+	})
 }
 
 func (m Model) startLocalPlayback(file lib.File) (tea.Model, tea.Cmd) {
@@ -2904,6 +3034,7 @@ func (m Model) settingsView() string {
 		{"Database", dbPath, "-db requires restart"},
 		{"Providers", fmt.Sprintf("%d/%d enabled", enabled, len(m.providers)), "ctrl+p providers"},
 		{"Hide adult", yesNo(m.hideAdult), "space / enter toggle"},
+		{"Autoplay next", yesNo(m.autoplay), "space / enter toggle"},
 		{"Color theme", themeLabel(m.theme), "space / ← → cycle"},
 		{"Font", "terminal setting", "IBM Plex Mono recommended"},
 	}
@@ -3307,6 +3438,7 @@ type settingsMsg struct {
 	quality   string
 	theme     string
 	hideAdult bool
+	autoplay  bool
 	err       error
 }
 
@@ -3450,7 +3582,7 @@ func browseCmd(meta metaProvider, genre string, page int, includeAdult bool) tea
 func loadSettingsCmd(st *store.Store) tea.Cmd {
 	return func() tea.Msg {
 		if st == nil {
-			return settingsMsg{}
+			return settingsMsg{autoplay: true}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -3463,7 +3595,11 @@ func loadSettingsCmd(st *store.Store) tea.Cmd {
 			return settingsMsg{err: err}
 		}
 		hideAdult, err := st.GetSetting(ctx, "hide_adult", "no")
-		return settingsMsg{quality: quality, theme: theme, hideAdult: hideAdult == "yes", err: err}
+		if err != nil {
+			return settingsMsg{err: err}
+		}
+		autoplay, err := st.GetSetting(ctx, "autoplay", "yes")
+		return settingsMsg{quality: quality, theme: theme, hideAdult: hideAdult == "yes", autoplay: autoplay == "yes", err: err}
 	}
 }
 

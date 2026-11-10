@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1328,6 +1329,220 @@ func TestPlayWithKeepsTUIAndRestoresScreen(t *testing.T) {
 	}
 	if done.player != nil || done.playCancel != nil {
 		t.Error("playback state not cleared")
+	}
+}
+
+// exitErr builds the *exec.ExitError a player returns for a custom exit code.
+func exitErr(t *testing.T, code int) error {
+	t.Helper()
+	err := exec.Command("sh", "-c", "exit "+strconv.Itoa(code)).Run()
+	if err == nil {
+		t.Fatalf("exit %d returned nil", code)
+	}
+	return err
+}
+
+// episodeFlowModel is an episodes screen with E001–E003 of one anime.
+func episodeFlowModel(t *testing.T, st *store.Store) Model {
+	t.Helper()
+	m := New([]provider.Provider{stubProvider{}}, t.TempDir(), st)
+	m.prov, m.anime = stubProvider{}, provider.Anime{Title: "A", URL: "a"}
+	m.episodes = []provider.Episode{{Number: 1, URL: "e1"}, {Number: 2, URL: "e2"}, {Number: 3, URL: "e3"}}
+	m.screen, m.playReturn = screenEpisodes, screenEpisodes
+	return m
+}
+
+func TestSiblingEpisode(t *testing.T) {
+	m := episodeFlowModel(t, nil)
+	info := playbackInfo{AnimeURL: "a", EpisodeURL: "e2"}
+	if ep, ok := m.siblingEpisode(info, 1); !ok || ep.URL != "e3" {
+		t.Fatalf("next = %+v, %v", ep, ok)
+	}
+	if ep, ok := m.siblingEpisode(info, -1); !ok || ep.URL != "e1" {
+		t.Fatalf("prev = %+v, %v", ep, ok)
+	}
+	if _, ok := m.siblingEpisode(playbackInfo{AnimeURL: "a", EpisodeURL: "e1"}, -1); ok {
+		t.Error("previous from the first episode")
+	}
+	if _, ok := m.siblingEpisode(playbackInfo{AnimeURL: "a", EpisodeURL: "e3"}, 1); ok {
+		t.Error("next from the last episode")
+	}
+	if _, ok := m.siblingEpisode(playbackInfo{AnimeURL: "b", EpisodeURL: "e2"}, 1); ok {
+		t.Error("matched an episode from another anime")
+	}
+	if _, ok := m.siblingEpisode(playbackInfo{AnimeURL: "a", EpisodeURL: "zz"}, 1); ok {
+		t.Error("matched an unknown episode")
+	}
+	m.episodes = nil
+	if _, ok := m.siblingEpisode(info, 1); ok {
+		t.Error("matched an empty list")
+	}
+	m.episodes = []provider.Episode{{Number: 1, URL: "e1"}}
+	m.prov = nil
+	if _, ok := m.siblingEpisode(playbackInfo{AnimeURL: "a", EpisodeURL: "e1"}, 1); ok {
+		t.Error("matched without a provider")
+	}
+}
+
+func TestPlaybackExitNextStartsSibling(t *testing.T) {
+	m := episodeFlowModel(t, nil)
+	m.player = &media.Player{Cmd: exec.Command("sh", "-c", "exit 0")}
+	m.playCancel = func() {}
+	m.playInfo = playbackInfo{Provider: "gogoanime", AnimeURL: "a", EpisodeURL: "e1"}
+
+	updated, cmd := m.Update(playbackDoneMsg{err: exitErr(t, media.ExitNext)})
+	got := updated.(Model)
+	if got.screen != screenBusy || got.busy != busyStream {
+		t.Fatalf("screen=%v busy=%v", got.screen, got.busy)
+	}
+	if !strings.Contains(got.status, "E002") {
+		t.Fatalf("status = %q", got.status)
+	}
+	if got.err != nil {
+		t.Fatalf("err = %v", got.err)
+	}
+	if cmd == nil {
+		t.Fatal("no stream command for the next episode")
+	}
+	if got.player != nil || got.playCancel != nil {
+		t.Error("finished player not cleaned up")
+	}
+
+	updated, cmd = got.Update(playbackDoneMsg{err: exitErr(t, media.ExitPrev)})
+	got = updated.(Model)
+	if !strings.Contains(got.status, "No previous episode") || cmd != nil {
+		t.Fatalf("status=%q cmd=%v", got.status, cmd != nil)
+	}
+}
+
+func TestPlaybackExitNextAtEnd(t *testing.T) {
+	m := episodeFlowModel(t, nil)
+	m.playInfo = playbackInfo{Provider: "gogoanime", AnimeURL: "a", EpisodeURL: "e3"}
+	updated, cmd := m.Update(playbackDoneMsg{err: exitErr(t, media.ExitNext)})
+	got := updated.(Model)
+	if got.status != "No next episode" {
+		t.Fatalf("status = %q", got.status)
+	}
+	if got.err != nil {
+		t.Fatalf("exit code shown as an error: %v", got.err)
+	}
+	if cmd != nil {
+		t.Fatal("started an episode past the end")
+	}
+}
+
+func TestPlaybackAutoplayStartsNext(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "autoplay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	m := episodeFlowModel(t, st)
+	m.playInfo = playbackInfo{Provider: "gogoanime", AnimeURL: "a", EpisodeURL: "e1", AnimeTitle: "A", EpisodeNumber: 1}
+	m.playProg = &playProgress{}
+	m.playProg.set(590, 600)
+
+	updated, cmd := m.Update(playbackDoneMsg{})
+	got := updated.(Model)
+	if got.screen != screenBusy || cmd == nil {
+		t.Fatalf("autoplay did not start: screen=%v cmd=%v", got.screen, cmd != nil)
+	}
+	if !strings.Contains(got.status, "E002") {
+		t.Fatalf("status = %q", got.status)
+	}
+	saved, ok, err := st.Progress(context.Background(), "gogoanime", "e1")
+	if err != nil || !ok || saved.Position != 0 {
+		t.Fatalf("finished progress = %+v ok=%v err=%v", saved, ok, err)
+	}
+}
+
+func TestPlaybackNoAutoplayWhenOffOrEarly(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		autoplay bool
+		quit     bool
+		pos      float64
+	}{
+		{"autoplay off", false, false, 590},
+		{"quit early", true, false, 30},
+		{"quitting", true, true, 590},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := episodeFlowModel(t, nil)
+			m.autoplay, m.quitting = tc.autoplay, tc.quit
+			m.playInfo = playbackInfo{Provider: "gogoanime", AnimeURL: "a", EpisodeURL: "e1"}
+			m.playProg = &playProgress{}
+			m.playProg.set(tc.pos, 600)
+
+			updated, cmd := m.Update(playbackDoneMsg{})
+			got := updated.(Model)
+			if got.status != "Playback ended" || cmd != nil {
+				t.Fatalf("status=%q cmd=%v", got.status, cmd != nil)
+			}
+			if got.screen != screenEpisodes {
+				t.Fatalf("screen = %v", got.screen)
+			}
+		})
+	}
+}
+
+func TestPlaybackLocalNeverAutoplays(t *testing.T) {
+	m := episodeFlowModel(t, nil)
+	m.playReturn = screenLibrary
+	m.playInfo = playbackInfo{Provider: "local", AnimeURL: "/tmp/e1.mp4", EpisodeURL: "/tmp/e1.mp4"}
+	m.playProg = &playProgress{}
+	m.playProg.set(590, 600)
+
+	updated, cmd := m.Update(playbackDoneMsg{})
+	got := updated.(Model)
+	if got.status != "Playback ended" {
+		t.Fatalf("status = %q", got.status)
+	}
+	if got.screen != screenLibrary || cmd == nil {
+		t.Fatalf("library not rescanned: screen=%v cmd=%v", got.screen, cmd != nil)
+	}
+}
+
+func TestAutoplaySetting(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "autoplay-setting.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	m := New(nil, t.TempDir(), st)
+	if !m.autoplay {
+		t.Fatal("autoplay should default to on")
+	}
+	if !loadSettingsCmd(st)().(settingsMsg).autoplay {
+		t.Fatal("stored autoplay defaulted to off")
+	}
+
+	m.screen, m.settingsRow = screenSettings, settingsAutoplay
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
+	got := updated.(Model)
+	if got.autoplay {
+		t.Fatal("space did not disable autoplay")
+	}
+	if saved, _ := st.GetSetting(context.Background(), "autoplay", ""); saved != "no" {
+		t.Fatalf("stored autoplay = %q", saved)
+	}
+	if loadSettingsCmd(st)().(settingsMsg).autoplay {
+		t.Fatal("autoplay was not reloaded")
+	}
+
+	updated, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if !updated.(Model).autoplay {
+		t.Fatal("enter did not enable autoplay")
+	}
+	if saved, _ := st.GetSetting(context.Background(), "autoplay", ""); saved != "yes" {
+		t.Fatalf("stored autoplay = %q", saved)
+	}
+
+	updated, _ = m.Update(settingsMsg{autoplay: false})
+	if updated.(Model).autoplay {
+		t.Fatal("settingsMsg did not apply autoplay")
 	}
 }
 

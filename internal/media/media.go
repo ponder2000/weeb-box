@@ -26,6 +26,25 @@ import (
 
 const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
 
+// mpv exits with these codes when the in-player bindings ask for another
+// episode; the TUI reads them instead of adding an IPC direction.
+const (
+	ExitNext = 10
+	ExitPrev = 11
+)
+
+// ExitCode reports a player's exit code, 0 for a clean exit.
+func ExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return -1
+}
+
 // Progress is one ffmpeg progress sample. Bytes and Speed may be zero when
 // ffmpeg has not reported them yet.
 type Progress struct {
@@ -209,8 +228,7 @@ func Play(ctx context.Context, src provider.Stream, title string, start float64,
 	}
 
 	if _, err := exec.LookPath("mpv"); err == nil {
-		args := mpvArgs(title, start, src.Referer, subArg, socket)
-		return &Player{Cmd: exec.Command("mpv", append(args, src.URL)...), socket: socket, dir: dir}, nil
+		return &Player{Cmd: exec.Command("mpv", append(mpvPlayArgs(title, start, src.Referer, subArg, socket, dir), src.URL)...), socket: socket, dir: dir}, nil
 	}
 	if _, err := exec.LookPath("ffplay"); err == nil {
 		args := ffplayArgs(title, start, src)
@@ -235,7 +253,7 @@ func PlayLocal(path, title string, start float64) (*Player, error) {
 		if err != nil {
 			return nil, err
 		}
-		args := mpvArgs(title, start, "", subArg, socket)
+		args := mpvPlayArgs(title, start, "", subArg, socket, dir)
 		return &Player{Cmd: exec.Command("mpv", append(args, path)...), socket: socket, dir: dir}, nil
 	}
 	if _, err := exec.LookPath("ffplay"); err == nil {
@@ -253,6 +271,26 @@ func playerDir() (dir, socket string, err error) {
 		socket = filepath.Join(dir, "mpv.sock")
 	}
 	return dir, socket, nil
+}
+
+// mpvPlayArgs builds the mpv command line and adds the per-play input bindings.
+func mpvPlayArgs(title string, start float64, referer, subFile, socket, dir string) []string {
+	args := mpvArgs(title, start, referer, subFile, socket)
+	if conf, err := writeInputConf(dir); err == nil {
+		args = append(args, "--input-conf="+conf)
+	}
+	return args
+}
+
+// writeInputConf writes the next/prev bindings into dir, keeping the user's own
+// bindings first. mpv's quit <code> is how the TUI learns which way to go.
+func writeInputConf(dir string) (string, error) {
+	path := filepath.Join(dir, "input.conf")
+	body := "> quit 10\n< quit 11\nn quit 10\np quit 11\n"
+	if user, err := os.ReadFile(filepath.Join(MPVConfigDir(), "input.conf")); err == nil && len(user) > 0 {
+		body = strings.TrimRight(string(user), "\n") + "\n" + body
+	}
+	return path, os.WriteFile(path, []byte(body), 0o644)
 }
 
 func mpvArgs(title string, start float64, referer, subFile, socket string) []string {

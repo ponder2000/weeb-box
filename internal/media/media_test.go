@@ -2,12 +2,14 @@ package media
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -209,6 +211,74 @@ func TestMPVArgsAccepted(t *testing.T) {
 	args = append(args, "--vo=null", "--ao=null", "--force-window=no", "--really-quiet", video)
 	if out, err := exec.Command("mpv", args...).CombinedOutput(); err != nil {
 		t.Fatalf("mpv rejected args: %v\n%s", err, out)
+	}
+}
+
+func TestInputConfBindings(t *testing.T) {
+	t.Setenv("MPV_HOME", t.TempDir()) // keep the real user config out of the test
+	dir := t.TempDir()
+	path, err := writeInputConf(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"> quit 10", "< quit 11", "n quit 10", "p quit 11"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("missing %q in %q", want, data)
+		}
+	}
+}
+
+func TestInputConfKeepsUserBindings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MPV_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "input.conf"), []byte("q quit\nUP seek 60\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := writeInputConf(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), "q quit\nUP seek 60\n") {
+		t.Errorf("user bindings not preserved: %q", data)
+	}
+	if !strings.Contains(string(data), "n quit 10") {
+		t.Errorf("missing next binding: %q", data)
+	}
+}
+
+func TestMPVPlayArgsIncludeInputConf(t *testing.T) {
+	t.Setenv("MPV_HOME", t.TempDir())
+	dir := t.TempDir()
+	args := mpvPlayArgs("weeb-box — E001", 0, "", "", "", dir)
+	want := "--input-conf=" + filepath.Join(dir, "input.conf")
+	if !slices.Contains(args, want) {
+		t.Fatalf("args = %v, want %s", args, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "input.conf")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	if got := ExitCode(nil); got != 0 {
+		t.Errorf("nil err = %d", got)
+	}
+	for _, code := range []int{ExitNext, ExitPrev, 3} {
+		err := exec.Command("sh", "-c", "exit "+strconv.Itoa(code)).Run()
+		if got := ExitCode(err); got != code {
+			t.Errorf("ExitCode = %d, want %d", got, code)
+		}
+	}
+	if got := ExitCode(errors.New("boom")); got != -1 {
+		t.Errorf("non-exit error = %d", got)
 	}
 }
 
