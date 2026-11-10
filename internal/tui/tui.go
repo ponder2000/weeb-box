@@ -425,13 +425,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
-			if m.cancelDownload != nil {
-				m.cancelDownload()
-			}
-			if m.playCancel != nil {
-				m.playCancel()
-			}
-			return m, tea.Quit
+			return m, m.quit()
 		}
 		return m.handleKey(msg)
 
@@ -766,6 +760,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// quit stops background work so the player and downloads do not outlive the TUI.
+func (m Model) quit() tea.Cmd {
+	if m.cancelDownload != nil {
+		m.cancelDownload()
+	}
+	if m.playCancel != nil {
+		m.playCancel()
+	}
+	return tea.Quit
+}
+
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
@@ -783,7 +788,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if key == "q" && !(m.screen == screenHome && m.focus == focusSearch) {
-		return m, tea.Quit
+		return m, m.quit()
 	}
 	if key == "v" && m.screen != screenHome && m.screen != screenHelp && m.screen != screenBusy {
 		if len(m.queue) > 0 {
@@ -1109,7 +1114,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case focusSearch:
 		switch key {
 		case "esc":
-			return m, tea.Quit
+			return m, m.quit()
 		case "enter":
 			query := strings.TrimSpace(m.search.Value())
 			if query == "" {
@@ -1823,6 +1828,12 @@ type playbackInfo struct {
 }
 
 func (m Model) playWith(player *media.Player, info playbackInfo, start float64) (tea.Model, tea.Cmd) {
+	if m.playCancel != nil {
+		// Starting a second player would orphan the first window.
+		player.Cleanup()
+		m.err = fmt.Errorf("a player is already open")
+		return m, nil
+	}
 	m.player = player
 	ctx, cancel := context.WithCancel(context.Background())
 	m.playCancel = cancel
@@ -1832,6 +1843,17 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 			AnimeTitle: info.AnimeTitle, EpisodeNumber: info.EpisodeNumber,
 			Position: start, Duration: info.Duration,
 		})
+	}
+	// The TUI keeps running while mpv is open, so show where we came from.
+	m.screen = m.playReturn
+	if err := player.Start(ctx); err != nil {
+		cancel()
+		m.playCancel = nil
+		m.player = nil
+		player.Cleanup()
+		m.err = err
+		m.status = ""
+		return m, nil
 	}
 	go player.WatchProgress(ctx, func(position, duration float64) {
 		if m.st == nil {
@@ -1846,10 +1868,15 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 			Position: position, Duration: duration,
 		})
 	})
-	m.status = "Playing — close the player to return"
-	return m, tea.ExecProcess(player.Cmd, func(err error) tea.Msg {
+	m.status = "Playing in mpv — TUI stays; close the player to return"
+	return m, func() tea.Msg {
+		err := player.Wait()
+		if ctx.Err() != nil {
+			// Cancelled by quit/ctrl+c; that is not a playback failure.
+			err = nil
+		}
 		return playbackDoneMsg{err: err}
-	})
+	}
 }
 
 func (m Model) startLocalPlayback(file lib.File) (tea.Model, tea.Cmd) {
