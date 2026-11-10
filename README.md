@@ -122,7 +122,7 @@ KissAnime.tv.in was evaluated but is not wired yet: its search is an AJAX/CSRF e
 
 The selected quality applies to playback and downloads. The database and download paths are shown in the help screen too.
 
-Made by [@chotathanos](https://x.com/chotathanos).
+The header shows `(developed by @chotathanos)` as a clickable link to [x.com/chotathanos](https://x.com/chotathanos).
 
 ## Theme
 

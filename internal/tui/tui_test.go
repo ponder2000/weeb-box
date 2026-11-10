@@ -444,12 +444,12 @@ func TestFailedDownloadMarksQueueItem(t *testing.T) {
 	}
 }
 
-func TestCreatorLineContents(t *testing.T) {
+func TestCreatorHeaderContents(t *testing.T) {
 	m := New(nil, t.TempDir(), nil)
 	m.width, m.height = 120, 40
 	view := m.View()
-	if !strings.Contains(view, creatorText) {
-		t.Fatalf("view is missing %q", creatorText)
+	if !strings.Contains(view, "(developed by ") || !strings.Contains(view, "@chotathanos") {
+		t.Fatal("view is missing the developer credit")
 	}
 	if !strings.Contains(view, "\x1b]8;;"+creatorURL+"\x1b\\") {
 		t.Fatalf("view is missing the OSC 8 link to %s", creatorURL)
@@ -457,33 +457,28 @@ func TestCreatorLineContents(t *testing.T) {
 	if !strings.Contains(view, "\x1b]8;;\x1b\\") {
 		t.Fatal("hyperlink is not closed")
 	}
-	lines := strings.Split(view, "\n")
-	if last := lines[len(lines)-1]; !strings.Contains(last, "@chotathanos") {
-		t.Fatalf("credit is not the bottom line: %q", last)
-	}
-	if got := lipgloss.Width(lines[len(lines)-1]); got > 120 {
-		t.Fatalf("credit line width = %d", got)
+	header := strings.Split(view, "\n")[0]
+	if !strings.Contains(header, "@chotathanos") {
+		t.Fatalf("credit is not in the header: %q", header)
 	}
 }
 
-func TestCreatorLineFit(t *testing.T) {
-	for _, tc := range []struct {
-		w, h  int
-		shown bool
-	}{{80, 24, false}, {120, 40, true}} {
+func TestCreatorHeaderFit(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{80, 24}, {120, 40}} {
 		m := New(nil, t.TempDir(), nil)
-		m.width, m.height = tc.w, tc.h
+		m.width, m.height = size.w, size.h
 		m.layout()
 		view := m.View()
-		if got := lipgloss.Height(view); got != tc.h {
-			t.Errorf("%dx%d: height = %d", tc.w, tc.h, got)
+		if got := lipgloss.Height(view); got != size.h {
+			t.Errorf("%dx%d: height = %d", size.w, size.h, got)
 		}
-		if got := strings.Contains(view, creatorText); got != tc.shown {
-			t.Errorf("%dx%d: credit shown = %v", tc.w, tc.h, got)
+		header := strings.Split(view, "\n")[0]
+		if !strings.Contains(header, "(developed by ") || !strings.Contains(header, "@chotathanos") {
+			t.Errorf("%dx%d: credit missing from header", size.w, size.h)
 		}
 		for i, line := range strings.Split(view, "\n") {
-			if got := lipgloss.Width(line); got > tc.w {
-				t.Errorf("%dx%d: line %d width %d", tc.w, tc.h, i+1, got)
+			if got := lipgloss.Width(line); got > size.w {
+				t.Errorf("%dx%d: line %d width %d", size.w, size.h, i+1, got)
 			}
 		}
 	}
@@ -492,17 +487,17 @@ func TestCreatorLineFit(t *testing.T) {
 func TestCreatorHitTarget(t *testing.T) {
 	m := New(nil, t.TempDir(), nil)
 	m.width, m.height = 120, 40
-	x := m.leftMargin() + m.creatorPad()
-	if !m.creatorHit(x, m.height-1) {
-		t.Fatal("credit text is not clickable")
+	x := m.leftMargin() + lipgloss.Width("weeb-box  ")
+	if !m.creatorHit(x, 0) {
+		t.Fatal("header credit is not clickable")
 	}
-	if m.creatorHit(x, m.height-2) {
-		t.Fatal("hint row should not open the credit link")
+	if m.creatorHit(x, 1) {
+		t.Fatal("rule row should not open the credit link")
 	}
 
 	m.width, m.height = 80, 24
-	if m.creatorHit(m.leftMargin(), m.height-1) {
-		t.Fatal("hidden credit should not be clickable")
+	if !m.creatorHit(m.leftMargin()+lipgloss.Width("weeb-box  "), 0) {
+		t.Fatal("header credit should be visible at 80x24")
 	}
 }
 

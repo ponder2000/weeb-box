@@ -53,7 +53,7 @@ var qualityOptions = []string{"auto", "1080p", "720p", "480p"}
 
 const (
 	creatorURL  = "https://x.com/chotathanos"
-	creatorText = "made by @chotathanos"
+	creatorText = "developed by @chotathanos"
 )
 
 type focus int
@@ -1497,6 +1497,7 @@ func (m Model) header() string {
 	if m.screen != screenHome {
 		left += "  " + dimStyle.Render(m.screenName())
 	}
+	left += "  " + m.creatorLink()
 	right := lipgloss.JoinHorizontal(lipgloss.Center, pill(m.providerLabel()), " ", pill("v1"))
 	gap := max(1, m.viewWidth()-lipgloss.Width(left)-lipgloss.Width(right))
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, strings.Repeat(" ", gap), right)
@@ -1582,36 +1583,29 @@ func (m Model) footer() string {
 	for len(items) > 1 && lipgloss.Width(strings.Join(items, sep)) > m.viewWidth() {
 		items = items[:len(items)-1]
 	}
-	hints := strings.Join(items, sep)
-	if !m.showCreator() {
-		return hints
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, hints, m.creatorView())
+	return strings.Join(items, sep)
 }
 
-// showCreator hides the credit on 80x24 and shows it once a row is spare.
-func (m Model) showCreator() bool { return m.height >= 26 }
-
-// creatorView is a single, horizontally centered OSC 8 hyperlink line.
-func (m Model) creatorView() string {
-	return strings.Repeat(" ", m.creatorPad()) + m.creatorLine()
+func (m Model) creatorLink() string {
+	return dimStyle.Render("(developed by ") +
+		"\x1b]8;;" + creatorURL + "\x1b\\" +
+		dimStyle.Render("@chotathanos") +
+		"\x1b]8;;\x1b\\" +
+		dimStyle.Render(")")
 }
 
-func (m Model) creatorLine() string {
-	return "\x1b]8;;" + creatorURL + "\x1b\\" + dimStyle.Render(creatorText) + "\x1b]8;;\x1b\\"
-}
-
-func (m Model) creatorPad() int {
-	return max(0, (m.viewWidth()-lipgloss.Width(m.creatorLine()))/2)
-}
-
-// creatorHit reports whether an absolute terminal cell is on the credit line.
+// creatorHit reports whether an absolute terminal cell is on the header credit.
 func (m Model) creatorHit(x, y int) bool {
-	if !m.showCreator() || y != m.height-1 {
+	if y != 0 {
 		return false
 	}
-	start := m.leftMargin() + m.creatorPad()
-	return x >= start && x < start+lipgloss.Width(m.creatorLine())
+	prefix := "weeb-box"
+	if m.screen != screenHome {
+		prefix += "  " + m.screenName()
+	}
+	prefix += "  "
+	start := m.leftMargin() + lipgloss.Width(prefix)
+	return x >= start && x < start+lipgloss.Width(m.creatorLink())
 }
 
 func (m Model) homeView() string {
