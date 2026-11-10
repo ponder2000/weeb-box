@@ -103,15 +103,17 @@ const (
 )
 
 type item struct {
-	title    string
-	desc     string
-	anime    provider.Anime
-	episode  provider.Episode
-	progress store.Progress
-	file     lib.File
-	query    string
-	prov     provider.Provider
-	info     metadata.Info
+	title     string
+	desc      string
+	tokens    []token
+	titleKind tokenKind
+	anime     provider.Anime
+	episode   provider.Episode
+	progress  store.Progress
+	file      lib.File
+	query     string
+	prov      provider.Provider
+	info      metadata.Info
 }
 
 func (i item) Title() string       { return i.title }
@@ -160,33 +162,216 @@ func scrollTickCmd() tea.Cmd {
 	return tea.Tick(160*time.Millisecond, func(time.Time) tea.Msg { return scrollTickMsg{} })
 }
 
+// tokenKind is a semantic color role. Styles resolve at render time so a theme
+// change repaints items that were built under the previous palette.
+type tokenKind int
+
+const (
+	tokText tokenKind = iota
+	tokMuted
+	tokAccent
+	tokOK
+	tokWarn
+	tokErr
+	tokProvider
+)
+
+// token is one colored piece of a list row. Provider tokens carry the provider
+// name in text so its fixed color can be looked up during rendering.
+type token struct {
+	text string
+	kind tokenKind
+}
+
+// providerHex keeps each source recognizable; the mono theme ignores these.
+var providerHex = map[string]string{
+	"gogoanime": "#f1c21b",
+	"animekai":  "#ff7eb6",
+	"anizone":   "#42be65",
+	"kissanime": "#a56eff",
+	"hianime":   "#78a9ff",
+	"local":     "#3ddbd9",
+}
+
 type marqueeDelegate struct {
 	list.DefaultDelegate
-	state *scrollState
+	state  *scrollState
+	height int
+}
+
+// Height is explicit: main lists render two lines, the home lists one.
+func (d marqueeDelegate) Height() int {
+	if d.height > 0 {
+		return d.height
+	}
+	return d.DefaultDelegate.Height()
+}
+
+func (d marqueeDelegate) Spacing() int {
+	if d.height == 1 {
+		return 0
+	}
+	return d.DefaultDelegate.Spacing()
 }
 
 func (d marqueeDelegate) Render(w io.Writer, m list.Model, index int, data list.Item) {
-	item, ok := data.(list.DefaultItem)
+	it, ok := data.(item)
 	if !ok {
 		d.DefaultDelegate.Render(w, m, index, data)
 		return
 	}
-	width := max(8, m.Width()-8)
-	d.DefaultDelegate.Render(w, m, index, marqueeItem{DefaultItem: item, state: d.state, width: width})
-}
-
-type marqueeItem struct {
-	list.DefaultItem
-	state *scrollState
-	width int
-}
-
-func (i marqueeItem) Title() string {
-	offset := 0
-	if i.state != nil {
-		offset = i.state.offset
+	if m.Width() <= 0 {
+		return
 	}
-	return scrollText(i.DefaultItem.Title(), offset, i.width)
+	offset := 0
+	if d.state != nil {
+		offset = d.state.offset
+	}
+	isSelected := index == m.Index()
+	emptyFilter := m.FilterState() == list.Filtering && m.FilterValue() == ""
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorFor(it.titleKind))
+	marker := "  "
+	switch {
+	case emptyFilter:
+		titleStyle = titleStyle.Foreground(colorMuted)
+	case isSelected:
+		titleStyle = titleStyle.Foreground(colorAccent)
+		marker = lipgloss.NewStyle().Foreground(colorAccent).Render("▌ ")
+	}
+
+	// The marker takes two cells; every rendered line stays inside m.Width().
+	avail := max(4, m.Width()-2)
+	tokens := itemTokens(it)
+	if d.Height() == 1 {
+		block, used := renderTokens(tokens, avail, "  ", emptyFilter)
+		titleWidth := avail - used
+		if used > 0 {
+			titleWidth -= 2
+		}
+		if titleWidth < 8 {
+			block, titleWidth = "", avail
+		}
+		line := marker + titleStyle.Render(scrollText(it.title, offset, titleWidth))
+		if block != "" {
+			line += "  " + block
+		}
+		fmt.Fprint(w, line)
+		return
+	}
+	title := marker + titleStyle.Render(scrollText(it.title, offset, avail))
+	block, _ := renderTokens(tokens, avail, " · ", emptyFilter)
+	fmt.Fprintf(w, "%s\n%s%s", title, "  ", block)
+}
+
+// itemTokens falls back to the plain description for rows built without
+// tokens, such as the genre list.
+func itemTokens(it item) []token {
+	if len(it.tokens) > 0 {
+		return it.tokens
+	}
+	if it.desc == "" {
+		return nil
+	}
+	return []token{{text: it.desc, kind: tokMuted}}
+}
+
+func colorFor(k tokenKind) lipgloss.TerminalColor {
+	switch k {
+	case tokMuted:
+		return colorMuted
+	case tokAccent:
+		return colorAccent
+	case tokOK:
+		return colorOK
+	case tokWarn:
+		return colorWarn
+	case tokErr:
+		return colorErr
+	default:
+		return colorText
+	}
+}
+
+func tokenStyle(t token) lipgloss.Style {
+	if t.kind == tokProvider {
+		return lipgloss.NewStyle().Foreground(providerColor(t.text))
+	}
+	return lipgloss.NewStyle().Foreground(colorFor(t.kind))
+}
+
+func providerColor(name string) lipgloss.TerminalColor {
+	if activeTheme == "mono" {
+		return colorMuted
+	}
+	if hex, ok := providerHex[name]; ok {
+		return lipgloss.Color(hex)
+	}
+	return colorMuted
+}
+
+// renderTokens joins as many tokens as fit, returning the styled string and its
+// plain width.
+func renderTokens(tokens []token, maxWidth int, sep string, dim bool) (string, int) {
+	var b strings.Builder
+	used, count := 0, 0
+	sepWidth := runewidth.StringWidth(sep)
+	for _, t := range tokens {
+		add := runewidth.StringWidth(t.text)
+		if count > 0 {
+			add += sepWidth
+		}
+		if used+add > maxWidth {
+			break
+		}
+		if count > 0 {
+			b.WriteString(dimStyle.Render(sep))
+		}
+		style := tokenStyle(t)
+		if dim {
+			style = dimStyle
+		}
+		b.WriteString(style.Render(t.text))
+		used += add
+		count++
+	}
+	return b.String(), used
+}
+
+// metaTokens splits "TV · Sub · Completed" into colored pieces.
+func metaTokens(meta string) []token {
+	var out []token
+	for _, part := range strings.Split(meta, "·") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, token{text: part, kind: metaKind(part)})
+	}
+	return out
+}
+
+func metaKind(part string) tokenKind {
+	switch strings.ToLower(part) {
+	case "sub", "completed":
+		return tokOK
+	case "dub", "ongoing":
+		return tokWarn
+	case "upcoming":
+		return tokMuted
+	case "tv", "ona", "ova", "movie", "special":
+		return tokText
+	default:
+		return tokMuted
+	}
+}
+
+// progressBlocks is the compact home progress bar.
+func progressBlocks(ratio float64) string {
+	const width = 4
+	ratio = math.Max(0, math.Min(1, ratio))
+	filled := int(math.Round(ratio * width))
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", width-filled)
 }
 
 func (m Model) scrollOffset() int {
@@ -326,8 +511,9 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 
 	scroll := &scrollState{}
 	delegate := newThemedDelegate(scroll)
-	l := func() list.Model {
-		model := list.New(nil, delegate, 40, 8)
+	compact := newCompactDelegate(scroll)
+	l := func(d list.ItemDelegate) list.Model {
+		model := list.New(nil, d, 40, 8)
 		model.SetShowTitle(false)
 		model.SetShowStatusBar(false)
 		model.SetShowHelp(false)
@@ -354,9 +540,9 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 		screen:         screenHome,
 		focus:          focusSearch,
 		search:         search,
-		resume:         l(),
-		recent:         l(),
-		main:           l(),
+		resume:         l(compact),
+		recent:         l(compact),
+		main:           l(delegate),
 		spinner:        sp,
 		progressByURL:  map[string]store.Progress{},
 		downloadsByNum: map[int]store.Download{},
@@ -482,14 +668,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		resume := make([]list.Item, len(msg.progress))
 		for i, p := range msg.progress {
 			resume[i] = item{
-				title:    p.AnimeTitle,
-				desc:     fmt.Sprintf("E%03d · %s · %s / %s", p.EpisodeNumber, progressPct(p), clock(p.Position), clock(p.Duration)),
+				title: p.AnimeTitle,
+				desc:  fmt.Sprintf("E%03d · %s · %s / %s", p.EpisodeNumber, progressPct(p), clock(p.Position), clock(p.Duration)),
+				tokens: []token{
+					{text: progressBlocks(progressRatio(p)), kind: tokAccent},
+					{text: progressPct(p), kind: tokAccent},
+					{text: fmt.Sprintf("E%03d", p.EpisodeNumber), kind: tokMuted},
+				},
 				progress: p,
 			}
 		}
 		recent := make([]list.Item, len(msg.recents))
 		for i, s := range msg.recents {
-			recent[i] = item{title: s.Query, desc: ago(s.LastUsed), query: s.Query}
+			recent[i] = item{
+				title:  s.Query,
+				desc:   ago(s.LastUsed),
+				tokens: []token{{text: ago(s.LastUsed), kind: tokMuted}},
+				query:  s.Query,
+			}
 		}
 		m.resume.SetItems(resume)
 		m.resume.Select(0)
@@ -602,7 +798,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		items := make([]list.Item, len(msg.items))
 		for i, info := range msg.items {
 			m.metaCache[metadata.Key(info.Title)] = info
-			items[i] = item{title: info.Title, desc: browseDesc(info), info: info}
+			tokens := []token{{text: ratingBadge(info), kind: tokMuted}}
+			if info.Adult {
+				tokens[0].kind = tokErr
+			}
+			if len(info.Genres) > 0 {
+				tokens = append(tokens, token{text: strings.Join(info.Genres[:min(2, len(info.Genres))], ", "), kind: tokMuted})
+			}
+			if info.Score > 0 {
+				tokens = append(tokens, token{text: fmt.Sprintf("★ %.0f", info.Score), kind: tokWarn})
+			}
+			items[i] = item{title: info.Title, desc: browseDesc(info), tokens: tokens, info: info}
 		}
 		m.main.SetItems(items)
 		m.main.Select(0)
@@ -625,20 +831,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.downloadsByNum = msg.downloads
 		items := make([]list.Item, len(msg.episodes))
 		for i, ep := range msg.episodes {
-			var parts []string
+			var tokens []token
 			if ep.Title != "" {
-				parts = append(parts, ep.Title)
-			}
-			if p, ok := msg.progress[ep.URL]; ok && p.Position > 0 {
-				parts = append(parts, progressPct(p)+" watched")
+				tokens = append(tokens, token{text: ep.Title, kind: tokText})
 			}
 			if _, ok := msg.downloads[ep.Number]; ok {
-				parts = append(parts, "downloaded")
+				tokens = append(tokens, token{text: "downloaded", kind: tokOK})
+			}
+			if p, ok := msg.progress[ep.URL]; ok && p.Position > 0 {
+				tokens = append(tokens, token{text: progressPct(p) + " watched", kind: tokAccent})
+			}
+			parts := make([]string, len(tokens))
+			for j, t := range tokens {
+				parts[j] = t.text
 			}
 			items[i] = item{
-				title:   fmt.Sprintf("E%03d", ep.Number),
-				desc:    strings.Join(parts, " · "),
-				episode: ep,
+				title:     fmt.Sprintf("E%03d", ep.Number),
+				titleKind: tokAccent,
+				desc:      strings.Join(parts, " · "),
+				tokens:    tokens,
+				episode:   ep,
 			}
 		}
 		m.main.SetItems(items)
@@ -656,14 +868,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.localProgress = msg.progress
 		items := make([]list.Item, len(msg.files))
 		for i, file := range msg.files {
-			parts := []string{humanBytes(file.Size), file.ModTime.Format("2006-01-02")}
+			tokens := []token{
+				{text: humanBytes(file.Size), kind: tokMuted},
+				{text: file.ModTime.Format("2006-01-02"), kind: tokMuted},
+			}
 			if file.HasSubs {
-				parts = append(parts, "subs")
+				tokens = append(tokens, token{text: "subs", kind: tokOK})
 			}
 			if p, ok := msg.progress[file.Path]; ok && p.Position > 0 {
-				parts = append(parts, progressPct(p)+" watched")
+				tokens = append(tokens, token{text: progressPct(p) + " watched", kind: tokAccent})
 			}
-			items[i] = item{title: file.Title(), desc: strings.Join(parts, " · "), file: file}
+			parts := make([]string, len(tokens))
+			for j, t := range tokens {
+				parts[j] = t.text
+			}
+			items[i] = item{title: file.Title(), desc: strings.Join(parts, " · "), tokens: tokens, file: file}
 		}
 		m.main.SetItems(items)
 		m.main.Select(0)
@@ -1613,7 +1832,8 @@ func (m Model) animeItems() []list.Item {
 		if result.anime.Meta != "" {
 			desc += " · " + result.anime.Meta
 		}
-		items[i] = item{title: result.anime.Title, desc: desc, anime: result.anime, prov: result.provider}
+		tokens := append([]token{{text: name, kind: tokProvider}}, metaTokens(result.anime.Meta)...)
+		items[i] = item{title: result.anime.Title, desc: desc, tokens: tokens, anime: result.anime, prov: result.provider}
 	}
 	return items
 }
@@ -1747,24 +1967,25 @@ func (m Model) clickMouse(x, y int) (tea.Model, tea.Cmd) {
 		if m.previewSplit() && bx >= m.resultsLeftOuter() {
 			return m, nil
 		}
-		updated, cmd := m.clickList(&m.main, by, 4, screenResults)
-		mm := updated.(Model)
-		return mm, tea.Batch(cmd, mm.ensurePreview())
+		cmd := m.clickList(&m.main, by, 4, screenResults)
+		return m, tea.Batch(cmd, m.ensurePreview())
 	case screenGenres:
-		return m.clickList(&m.main, by, 4, screenGenres)
+		cmd := m.clickList(&m.main, by, 4, screenGenres)
+		return m, cmd
 	case screenBrowse:
 		if m.previewSplit() && bx >= m.resultsLeftOuter() {
 			return m, nil
 		}
-		updated, cmd := m.clickList(&m.main, by, 4, screenBrowse)
-		mm := updated.(Model)
-		return mm, tea.Batch(cmd, mm.ensurePreview())
+		cmd := m.clickList(&m.main, by, 4, screenBrowse)
+		return m, tea.Batch(cmd, m.ensurePreview())
 	case screenEpisodes:
 		return m.clickEpisodes(bx, by)
 	case screenLibrary:
-		return m.clickList(&m.main, by, 4, screenLibrary)
+		cmd := m.clickList(&m.main, by, 4, screenLibrary)
+		return m, cmd
 	case screenProviders:
-		return m.clickList(&m.main, by, 4, screenProviders)
+		cmd := m.clickList(&m.main, by, 4, screenProviders)
+		return m, cmd
 	case screenSettings:
 		if row := by - 4; row >= 0 && row < settingsRowCount {
 			m.settingsRow = row
@@ -1819,14 +2040,16 @@ func (m Model) clickHome(bx, by int) (tea.Model, tea.Cmd) {
 	if by < panelsTop+2 {
 		return m, nil
 	}
-	return m.clickList(target, by, panelsTop+2, screenHome)
+	cmd := m.clickListRows(target, by, panelsTop+2, screenHome, 1)
+	return m, cmd
 }
 
 func (m Model) clickEpisodes(bx, by int) (tea.Model, tea.Cmd) {
 	content := m.viewWidth()
 	leftOuter := content * 56 / 100
 	if bx < leftOuter {
-		return m.clickList(&m.main, by, 4, screenEpisodes)
+		cmd := m.clickList(&m.main, by, 4, screenEpisodes)
+		return m, cmd
 	}
 	if bx < leftOuter+2 {
 		return m, nil
@@ -1852,28 +2075,42 @@ func (m Model) clickEpisodes(bx, by int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) clickList(target *list.Model, by, listStart int, on screen) (tea.Model, tea.Cmd) {
-	index := listIndex(*target, by-listStart)
+func (m *Model) clickList(target *list.Model, by, listStart int, on screen) tea.Cmd {
+	return m.clickListRows(target, by, listStart, on, 2)
+}
+
+// clickListRows is clickList for lists whose delegate row height is not the
+// default two lines (the home lists are one line per item). target points into
+// the receiver, so selecting and activation mutate m in place.
+func (m *Model) clickListRows(target *list.Model, by, listStart int, on screen, rowHeight int) tea.Cmd {
+	index := listIndexRows(*target, by-listStart, rowHeight)
 	if index < 0 {
-		return m, nil
+		return nil
 	}
 	key := fmt.Sprintf("%d:%d", on, index)
 	if m.lastClickKey == key && time.Since(m.lastClickAt) < 600*time.Millisecond {
 		m.lastClickKey = ""
-		return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+		updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+		*m = updated.(Model)
+		return cmd
 	}
 	m.lastClickKey, m.lastClickAt = key, time.Now()
 	target.Select(index)
-	return m, nil
+	return nil
 }
 
 // listIndex maps a terminal row inside a list to an absolute item index. The
 // default list delegate renders each item on two lines.
 func listIndex(l list.Model, row int) int {
-	if row < 0 {
+	return listIndexRows(l, row, 2)
+}
+
+// listIndexRows maps a row using the delegate's line count per item.
+func listIndexRows(l list.Model, row, rowHeight int) int {
+	if row < 0 || rowHeight < 1 {
 		return -1
 	}
-	item := row / 2
+	item := row / rowHeight
 	if item < 0 || item >= l.Paginator.PerPage {
 		return -1
 	}
@@ -2887,8 +3124,21 @@ func (m *Model) layout() {
 	content := m.viewWidth()
 	m.search.Width = max(10, content-8)
 	halfInner := max(18, (content-2)/2-4)
-	// Leave room for the logo, search box, panels, stats, header and footer.
-	homeRows := max(1, min(8, m.height-23))
+	// Mirror homeView: logo, optional tagline, search box, panels, optional
+	// stats, and the status row all share the body area.
+	taglineRows := 0
+	if m.height >= 28 {
+		taglineRows = 1
+	}
+	statsRows := 0
+	if m.height >= 28 || (m.status == "" && m.err == nil) {
+		statsRows = 2
+	}
+	statusRows := 0
+	if m.err != nil || m.status != "" {
+		statusRows = 1
+	}
+	homeRows := max(1, m.height-17-taglineRows-statsRows-statusRows)
 	m.resume.SetSize(max(18, halfInner-2), homeRows)
 	m.recent.SetSize(max(18, halfInner-2), homeRows)
 	if m.screen == screenEpisodes {
@@ -3276,11 +3526,11 @@ func loadHomeCmd(st *store.Store, libraryRoot string) tea.Cmd {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		recents, err := st.RecentSearches(ctx, 8)
+		recents, err := st.RecentSearches(ctx, 12)
 		if err != nil {
 			return homeMsg{err: err}
 		}
-		progress, err := st.RecentProgress(ctx, 6)
+		progress, err := st.RecentProgress(ctx, 10)
 		if err != nil {
 			return homeMsg{err: err}
 		}
@@ -3509,28 +3759,35 @@ func newThemedDelegate(state *scrollState) marqueeDelegate {
 	return d
 }
 
+// newCompactDelegate is the one-line delegate used by the home lists.
+func newCompactDelegate(state *scrollState) marqueeDelegate {
+	d := newThemedDelegate(state)
+	d.height = 1
+	return d
+}
+
 func (m *Model) refreshTheme() {
 	m.search.PromptStyle = lipgloss.NewStyle().Foreground(colorAccent)
 	m.search.TextStyle = lipgloss.NewStyle().Foreground(colorText)
 	m.search.PlaceholderStyle = lipgloss.NewStyle().Foreground(colorFaint)
 	m.spinner.Style = lipgloss.NewStyle().Foreground(colorAccent)
 	delegate := newThemedDelegate(m.scroll)
-	m.resume.SetDelegate(delegate)
-	m.recent.SetDelegate(delegate)
+	m.resume.SetDelegate(newCompactDelegate(m.scroll))
+	m.recent.SetDelegate(newCompactDelegate(m.scroll))
 	m.main.SetDelegate(delegate)
 }
 
 type themeSpec struct {
 	name, label                             string
 	accent, muted, faint, line, text, keyBg string
-	err, ok                                 string
+	err, ok, warn                           string
 }
 
 var themeSpecs = []themeSpec{
-	{"carbon-dark", "Carbon Dark", "#78a9ff", "#8d8d8d", "#6f6f6f", "#393939", "#f4f4f4", "#262626", "#fa4d56", "#42be65"},
-	{"carbon-light", "Carbon Light", "#0043ce", "#525252", "#8d8d8d", "#e0e0e0", "#161616", "#e0e0e0", "#da1e28", "#198038"},
-	{"tokyo-night", "Tokyo Night", "#7aa2f7", "#565f89", "#414868", "#2a2e42", "#c0caf5", "#1f2335", "#f7768e", "#9ece6a"},
-	{"mono", "Mono", "#e6e6e6", "#8c8c8c", "#5c5c5c", "#3a3a3a", "#f2f2f2", "#2a2a2a", "#d0d0d0", "#d0d0d0"},
+	{"carbon-dark", "Carbon Dark", "#78a9ff", "#8d8d8d", "#6f6f6f", "#393939", "#f4f4f4", "#262626", "#fa4d56", "#42be65", "#f1c21b"},
+	{"carbon-light", "Carbon Light", "#0043ce", "#525252", "#8d8d8d", "#e0e0e0", "#161616", "#e0e0e0", "#da1e28", "#198038", "#8e6a00"},
+	{"tokyo-night", "Tokyo Night", "#7aa2f7", "#565f89", "#414868", "#2a2e42", "#c0caf5", "#1f2335", "#f7768e", "#9ece6a", "#e0af68"},
+	{"mono", "Mono", "#e6e6e6", "#8c8c8c", "#5c5c5c", "#3a3a3a", "#f2f2f2", "#2a2a2a", "#d0d0d0", "#d0d0d0", "#d0d0d0"},
 }
 
 var (
@@ -3542,6 +3799,9 @@ var (
 	colorKeyBg  lipgloss.TerminalColor = lipgloss.Color("#262626")
 	colorErr    lipgloss.TerminalColor = lipgloss.Color("#fa4d56")
 	colorOK     lipgloss.TerminalColor = lipgloss.Color("#42be65")
+	colorWarn   lipgloss.TerminalColor = lipgloss.Color("#f1c21b")
+
+	activeTheme = "carbon-dark"
 
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	dimStyle   = lipgloss.NewStyle().Foreground(colorMuted)
@@ -3558,6 +3818,7 @@ func applyTheme(name string) {
 			break
 		}
 	}
+	activeTheme = spec.name
 	colorAccent = lipgloss.Color(spec.accent)
 	colorMuted = lipgloss.Color(spec.muted)
 	colorFaint = lipgloss.Color(spec.faint)
@@ -3566,6 +3827,7 @@ func applyTheme(name string) {
 	colorKeyBg = lipgloss.Color(spec.keyBg)
 	colorErr = lipgloss.Color(spec.err)
 	colorOK = lipgloss.Color(spec.ok)
+	colorWarn = lipgloss.Color(spec.warn)
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	dimStyle = lipgloss.NewStyle().Foreground(colorMuted)
 	faintStyle = lipgloss.NewStyle().Foreground(colorFaint)
