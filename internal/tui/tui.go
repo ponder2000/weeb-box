@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -18,9 +19,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"github.com/ponder2000/weeb-box/internal/cover"
 	"github.com/ponder2000/weeb-box/internal/deps"
 	lib "github.com/ponder2000/weeb-box/internal/library"
 	"github.com/ponder2000/weeb-box/internal/media"
+	"github.com/ponder2000/weeb-box/internal/metadata"
 	"github.com/ponder2000/weeb-box/internal/provider"
 	"github.com/ponder2000/weeb-box/internal/store"
 )
@@ -30,6 +33,8 @@ type screen int
 const (
 	screenHome screen = iota
 	screenResults
+	screenGenres
+	screenBrowse
 	screenEpisodes
 	screenDownloads
 	screenLibrary
@@ -55,7 +60,21 @@ var qualityOptions = []string{"auto", "1080p", "720p", "480p"}
 const (
 	creatorURL  = "https://x.com/chotathanos"
 	creatorText = "developed by @chotathanos"
+	metaTTL     = 7 * 24 * time.Hour
+	coverCols   = 24
+	coverRows   = 10
 )
+
+// metaProvider is the metadata client surface the TUI needs; tests stub it.
+type metaProvider interface {
+	Lookup(ctx context.Context, title string) (metadata.Info, error)
+	Browse(ctx context.Context, genre string, page int) ([]metadata.Info, error)
+}
+
+// coverRenderer turns a cover URL into terminal art; tests stub it.
+type coverRenderer interface {
+	Render(ctx context.Context, url string, width, height int) (string, error)
+}
 
 type focus int
 
@@ -82,6 +101,7 @@ type item struct {
 	file     lib.File
 	query    string
 	prov     provider.Provider
+	info     metadata.Info
 }
 
 func (i item) Title() string       { return i.title }
@@ -231,6 +251,16 @@ type Model struct {
 	anime    provider.Anime
 	episodes []provider.Episode
 
+	meta         metaProvider
+	covers       coverRenderer
+	metaCache    map[string]metadata.Info
+	metaLoading  map[string]bool
+	metaFailed   map[string]bool
+	coverArt     map[string]string
+	coverLoading map[string]bool
+	browseGenre  string
+	browseLoad   bool
+
 	progressByURL  map[string]store.Progress
 	downloadsByNum map[int]store.Download
 
@@ -320,6 +350,13 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 		dirInput:       dirInput,
 		width:          80,
 		height:         24,
+		meta:           metadata.New(),
+		covers:         cover.New(),
+		metaCache:      map[string]metadata.Info{},
+		metaLoading:    map[string]bool{},
+		metaFailed:     map[string]bool{},
+		coverArt:       map[string]string{},
+		coverLoading:   map[string]bool{},
 	}
 	if len(providers) > 0 {
 		m.prov = providers[0]
@@ -460,7 +497,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("%d source(s) unavailable", msg.failed)
 		}
 		m.layout()
+		return m, m.ensurePreview()
+
+	case metaMsg:
+		delete(m.metaLoading, msg.key)
+		if msg.err != nil {
+			// A missing or unreachable metadata entry only costs the preview.
+			m.metaFailed[msg.key] = true
+			return m, nil
+		}
+		m.metaCache[msg.key] = msg.info
+		// Only the results and browse screens draw a cover.
+		if m.screen == screenResults || m.screen == screenBrowse {
+			return m, m.ensureCover(msg.info)
+		}
 		return m, nil
+
+	case coverMsg:
+		delete(m.coverLoading, msg.key)
+		if msg.err == nil && msg.art != "" {
+			m.coverArt[msg.key] = msg.art
+		}
+		return m, nil
+
+	case browseMsg:
+		if !m.browseLoad || msg.genre != m.browseGenre {
+			return m, nil
+		}
+		m.browseLoad = false
+		if msg.err != nil {
+			m.screen, m.err = screenGenres, msg.err
+			return m, nil
+		}
+		items := make([]list.Item, len(msg.items))
+		for i, info := range msg.items {
+			m.metaCache[metadata.Key(info.Title)] = info
+			items[i] = item{title: info.Title, desc: browseDesc(info), info: info}
+		}
+		m.main.SetItems(items)
+		m.main.Select(0)
+		m.screen, m.err = screenBrowse, nil
+		m.layout()
+		return m, m.ensurePreview()
 
 	case episodesMsg:
 		if msg.err != nil {
@@ -497,7 +575,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.main.Select(0)
 		m.screen, m.err, m.status = screenEpisodes, nil, ""
 		m.layout()
-		return m, nil
+		return m, m.ensureMeta(m.anime.Title)
 
 	case libraryMsg:
 		m.libraryLoading = false
@@ -618,7 +696,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitFor(m.dlCh)
 
 	case spinner.TickMsg:
-		if m.screen != screenBusy && !(m.screen == screenLibrary && m.libraryLoading) && !(m.screen == screenProviders && m.providerLoading) {
+		if m.screen != screenBusy && !(m.screen == screenLibrary && m.libraryLoading) && !(m.screen == screenProviders && m.providerLoading) && !m.browseLoad && len(m.metaLoading) == 0 {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -661,6 +739,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.screen != screenBusy && key == "ctrl+p" {
 		return m.openProviders()
 	}
+	if m.screen != screenBusy && key == "ctrl+b" {
+		return m.openGenres()
+	}
 	if m.screen != screenBusy && key == "ctrl+o" {
 		return m.openSettings()
 	}
@@ -668,6 +749,38 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenHome:
 		return m.handleHomeKey(msg)
+	case screenGenres:
+		switch key {
+		case "esc", "left", "backspace":
+			return m.goHome()
+		case "enter":
+			selected, ok := m.main.SelectedItem().(item)
+			if !ok {
+				return m, nil
+			}
+			return m.startBrowse(selected.title)
+		}
+		var cmd tea.Cmd
+		m.main, cmd = m.main.Update(msg)
+		return m, cmd
+	case screenBrowse:
+		switch key {
+		case "esc", "left", "backspace":
+			return m.openGenres()
+		case "enter":
+			selected, ok := m.main.SelectedItem().(item)
+			if !ok || selected.title == "" {
+				return m, nil
+			}
+			title := previewTitle(selected)
+			m.search.SetValue(title)
+			m.screen, m.busy, m.err = screenBusy, busySearch, nil
+			m.status = fmt.Sprintf("Searching %q…", title)
+			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.activeProviders(), title))
+		}
+		var cmd tea.Cmd
+		m.main, cmd = m.main.Update(msg)
+		return m, tea.Batch(cmd, m.ensurePreview())
 	case screenResults:
 		switch key {
 		case "esc", "left", "backspace":
@@ -691,13 +804,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.main, cmd = m.main.Update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, m.ensurePreview())
 
 	case screenEpisodes:
 		switch key {
 		case "esc", "left", "backspace":
 			m.showResults()
-			return m, nil
+			return m, m.ensurePreview()
 		case "enter":
 			selected, ok := m.main.SelectedItem().(item)
 			if !ok {
@@ -1071,6 +1184,175 @@ func (m Model) openSettings() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openGenres shows the AniList genre list that drives Browse.
+func (m Model) openGenres() (tea.Model, tea.Cmd) {
+	items := make([]list.Item, len(metadata.Genres))
+	for i, genre := range metadata.Genres {
+		items[i] = item{title: genre, desc: "popular · non-adult"}
+	}
+	m.screen, m.err, m.status = screenGenres, nil, ""
+	m.browseLoad = false
+	m.main.SetItems(items)
+	m.main.Select(0)
+	m.layout()
+	return m, nil
+}
+
+func (m Model) startBrowse(genre string) (tea.Model, tea.Cmd) {
+	if m.meta == nil {
+		m.err = fmt.Errorf("metadata client unavailable")
+		return m, nil
+	}
+	m.browseGenre, m.browseLoad = genre, true
+	m.screen, m.err, m.status = screenBrowse, nil, ""
+	m.main.SetItems(nil)
+	m.layout()
+	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, genre, 1))
+}
+
+// ensureMeta starts a lookup for title unless it is cached, failing, or already
+// in flight.
+func (m *Model) ensureMeta(title string) tea.Cmd {
+	title = strings.TrimSpace(title)
+	if title == "" || m.meta == nil {
+		return nil
+	}
+	key := metadata.Key(title)
+	if _, ok := m.metaCache[key]; ok {
+		return nil
+	}
+	if m.metaLoading[key] || m.metaFailed[key] {
+		return nil
+	}
+	m.metaLoading[key] = true
+	return metaCmd(m.st, m.meta, title)
+}
+
+// ensureCover renders the cover for info unless it is cached or in flight.
+func (m *Model) ensureCover(info metadata.Info) tea.Cmd {
+	if info.CoverURL == "" || m.covers == nil {
+		return nil
+	}
+	key := metadata.Key(info.Title)
+	if _, ok := m.coverArt[key]; ok {
+		return nil
+	}
+	if m.coverLoading[key] {
+		return nil
+	}
+	m.coverLoading[key] = true
+	return coverCmd(m.covers, key, info.CoverURL)
+}
+
+// ensurePreview loads metadata (or just the cover) for the selected list item.
+func (m *Model) ensurePreview() tea.Cmd {
+	selected, ok := m.main.SelectedItem().(item)
+	if !ok {
+		return nil
+	}
+	title := previewTitle(selected)
+	if title == "" {
+		return nil
+	}
+	if info, ok := m.metaCache[metadata.Key(title)]; ok {
+		return m.ensureCover(info)
+	}
+	return m.ensureMeta(title)
+}
+
+func previewTitle(it item) string {
+	if it.anime.Title != "" {
+		return it.anime.Title
+	}
+	if it.info.Title != "" {
+		return it.info.Title
+	}
+	return it.title
+}
+
+// ratingBadge renders the age rating, preferring the 18+ badge for adult titles.
+func ratingBadge(info metadata.Info) string {
+	if info.Adult {
+		return "18+"
+	}
+	if info.Rating == "" {
+		return "Not rated"
+	}
+	return info.Rating
+}
+
+func browseDesc(info metadata.Info) string {
+	parts := []string{ratingBadge(info)}
+	if len(info.Genres) > 0 {
+		parts = append(parts, strings.Join(info.Genres[:min(2, len(info.Genres))], ", "))
+	}
+	if info.Score > 0 {
+		parts = append(parts, fmt.Sprintf("★ %.0f", info.Score))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// compactMeta is the one-line metadata fallback on narrow result lists.
+func (m Model) compactMeta(selected item) string {
+	title := previewTitle(selected)
+	if title == "" {
+		return ""
+	}
+	key := metadata.Key(title)
+	if info, ok := m.metaCache[key]; ok {
+		parts := []string{ratingBadge(info)}
+		if len(info.Genres) > 0 {
+			parts = append(parts, strings.Join(info.Genres[:min(3, len(info.Genres))], ", "))
+		}
+		return strings.Join(parts, " · ")
+	}
+	if m.metaLoading[key] {
+		return m.spinner.View() + " loading metadata…"
+	}
+	return ""
+}
+
+// previewBody is the side panel: cover art, rating, genres and top tags.
+func (m Model) previewBody(selected item, width int) string {
+	title := previewTitle(selected)
+	if title == "" {
+		return dimStyle.Render("Select a title")
+	}
+	key := metadata.Key(title)
+	info, ok := m.metaCache[key]
+	if !ok {
+		if m.metaLoading[key] {
+			return m.spinner.View() + dimStyle.Render(" loading metadata…")
+		}
+		return dimStyle.Render("No metadata for " + title)
+	}
+	var lines []string
+	// Covers are cached under the resolved title, which may differ from the
+	// search title that produced the metadata entry.
+	if art := m.coverArt[metadata.Key(info.Title)]; art != "" {
+		lines = append(lines, strings.Split(art, "\n")...)
+		lines = append(lines, "")
+	}
+	name := info.Title
+	if name == "" {
+		name = title
+	}
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorText).MaxWidth(width).Render(name))
+	badge := ratingBadge(info)
+	if info.Adult {
+		lines = append(lines, errStyle.Render(badge))
+	} else {
+		lines = append(lines, dimStyle.Render(badge))
+	}
+	if len(info.Genres) > 0 {
+		lines = append(lines, dimStyle.MaxWidth(width).Render(strings.Join(info.Genres, " · ")))
+	}
+	if len(info.Tags) > 0 {
+		lines = append(lines, faintStyle.MaxWidth(width).Render(strings.Join(info.Tags[:min(3, len(info.Tags))], " · ")))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // animeItems rebuilds the results list from the last search, so leaving the
 // episode view returns to results instead of showing episodes there.
 func (m Model) animeItems() []list.Item {
@@ -1156,7 +1438,15 @@ func (m Model) scrollMouse(x, y, delta int) Model {
 				m.recent.CursorDown()
 			}
 		}
-	case screenResults, screenLibrary, screenProviders:
+	case screenResults, screenBrowse:
+		if y >= m.bodyOffset() && (!m.previewSplit() || bx < m.resultsLeftOuter()) {
+			if delta < 0 {
+				m.main.CursorUp()
+			} else {
+				m.main.CursorDown()
+			}
+		}
+	case screenGenres, screenLibrary, screenProviders:
 		if y >= m.bodyOffset() {
 			if delta < 0 {
 				m.main.CursorUp()
@@ -1207,7 +1497,21 @@ func (m Model) clickMouse(x, y int) (tea.Model, tea.Cmd) {
 	case screenHome:
 		return m.clickHome(bx, by)
 	case screenResults:
-		return m.clickList(&m.main, by, 4, screenResults)
+		if m.previewSplit() && bx >= m.resultsLeftOuter() {
+			return m, nil
+		}
+		updated, cmd := m.clickList(&m.main, by, 4, screenResults)
+		mm := updated.(Model)
+		return mm, tea.Batch(cmd, mm.ensurePreview())
+	case screenGenres:
+		return m.clickList(&m.main, by, 4, screenGenres)
+	case screenBrowse:
+		if m.previewSplit() && bx >= m.resultsLeftOuter() {
+			return m, nil
+		}
+		updated, cmd := m.clickList(&m.main, by, 4, screenBrowse)
+		mm := updated.(Model)
+		return mm, tea.Batch(cmd, mm.ensurePreview())
 	case screenEpisodes:
 		return m.clickEpisodes(bx, by)
 	case screenLibrary:
@@ -1474,6 +1778,10 @@ func (m Model) bodyView() string {
 		body = m.homeView()
 	case screenResults:
 		body = m.resultsView()
+	case screenGenres:
+		body = m.genresView()
+	case screenBrowse:
+		body = m.browseView()
 	case screenEpisodes:
 		body = m.episodesView()
 	case screenDownloads:
@@ -1535,6 +1843,10 @@ func (m Model) screenName() string {
 	switch m.screen {
 	case screenResults:
 		return "search"
+	case screenGenres:
+		return "browse"
+	case screenBrowse:
+		return "browse"
 	case screenEpisodes:
 		return "episodes"
 	case screenDownloads:
@@ -1561,10 +1873,16 @@ func (m Model) footer() string {
 	switch m.screen {
 	case screenHome:
 		if m.focus == focusSearch {
-			items = []string{hint("enter", "search"), hint("tab", "history"), hint("ctrl+l", "library"), hint("ctrl+h", "help"), hint("esc", "quit")}
+			items = []string{hint("enter", "search"), hint("tab", "history"), hint("ctrl+b", "browse"), hint("ctrl+l", "library"), hint("ctrl+h", "help"), hint("esc", "quit")}
 		} else {
-			items = []string{hint("enter", "open"), hint("tab", "next"), hint("ctrl+l", "library"), hint("ctrl+h", "help"), hint("esc", "search")}
+			items = []string{hint("enter", "open"), hint("tab", "next"), hint("ctrl+b", "browse"), hint("ctrl+l", "library"), hint("ctrl+h", "help"), hint("esc", "search")}
 		}
+	case screenGenres:
+		items = []string{hint("enter", "browse genre"), hint("esc", "back")}
+	case screenBrowse:
+		items = []string{hint("enter", "search title"), hint("esc", "genres")}
+	case screenResults:
+		items = []string{hint("↑↓", "move"), hint("enter", "episodes"), hint("ctrl+b", "browse"), hint("esc", "back")}
 	case screenEpisodes:
 		items = []string{hint("enter", "play"), hint("d", "download"), hint("a", "rest"), hint("v", "queue"), hint("esc", "back")}
 	case screenDownloads:
@@ -1686,16 +2004,96 @@ func (m Model) homeView() string {
 
 func (m Model) resultsView() string {
 	content := m.viewWidth()
-	inner := content - 4
+	selected, _ := m.main.SelectedItem().(item)
 	body := m.main.View()
 	if len(m.main.Items()) == 0 {
 		body = dimStyle.Render("No results")
 	}
+	crumb := m.crumbs("Home", fmt.Sprintf("%q", m.search.Value()))
+	if m.previewSplit() {
+		leftOuter := m.resultsLeftOuter()
+		return lipgloss.JoinVertical(lipgloss.Left,
+			crumb,
+			"",
+			lipgloss.JoinHorizontal(lipgloss.Top,
+				panel("Results", body, max(10, leftOuter-2), true),
+				"  ",
+				panel("Preview", m.previewBody(selected, coverCols), coverCols+2, false),
+			),
+		)
+	}
+	parts := []string{crumb, "", panel("Results", body, content-4, true)}
+	if line := m.compactMeta(selected); line != "" {
+		parts = append(parts, "", dimStyle.MaxWidth(content-2).Render(line))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// previewSplit reports whether the results screen is wide enough for the side
+// preview column.
+func (m Model) previewSplit() bool {
+	return m.width >= 100
+}
+
+// resultsLeftOuter is the rendered width of the results list column.
+func (m Model) resultsLeftOuter() int {
+	content := m.viewWidth()
+	if !m.previewSplit() {
+		return content
+	}
+	// Preview panel width is coverCols+2 content + 2 border, plus a 2-column gap.
+	return content - (coverCols + 4) - 2
+}
+
+func (m Model) genresView() string {
+	content := m.viewWidth()
+	inner := content - 4
 	return lipgloss.JoinVertical(lipgloss.Left,
-		m.crumbs("Home", fmt.Sprintf("%q", m.search.Value())),
+		m.crumbs("Home", "browse"),
 		"",
-		panel("Results", body, inner, true),
+		panel("Genres", m.main.View(), inner, true),
 	)
+}
+
+func (m Model) browseView() string {
+	content := m.viewWidth()
+	inner := content - 4
+	if m.browseLoad {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.crumbs("Home", "browse", m.browseGenre),
+			"",
+			panel("Popular", m.spinner.View()+" Loading "+m.browseGenre+"…", inner, true),
+		)
+	}
+	if len(m.main.Items()) == 0 {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.crumbs("Home", "browse", m.browseGenre),
+			"",
+			panel("Popular", dimStyle.Render("No titles for this genre."), inner, true),
+		)
+	}
+	selected, _ := m.main.SelectedItem().(item)
+	if m.previewSplit() {
+		leftOuter := m.resultsLeftOuter()
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.crumbs("Home", "browse", m.browseGenre),
+			"",
+			lipgloss.JoinHorizontal(lipgloss.Top,
+				panel("Popular", m.main.View(), max(10, leftOuter-2), true),
+				"  ",
+				panel("Preview", m.previewBody(selected, coverCols), coverCols+2, false),
+			),
+		)
+	}
+	parts := []string{
+		m.crumbs("Home", "browse", m.browseGenre),
+		"",
+		panel("Popular", m.main.View(), inner, true),
+	}
+	if line := m.compactMeta(selected); line != "" {
+		parts = append(parts, "", dimStyle.MaxWidth(content-2).Render(line))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m Model) episodesView() string {
@@ -1734,6 +2132,16 @@ func (m Model) detailView(ep provider.Episode, width int) string {
 	}
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorText).MaxWidth(width-2).Render(title))
 	lines = append(lines, dimStyle.MaxWidth(width-2).Render(m.anime.Title))
+	if info, ok := m.metaCache[metadata.Key(m.anime.Title)]; ok {
+		meta := ratingBadge(info)
+		if len(info.Genres) > 0 {
+			meta += " · " + strings.Join(info.Genres, ", ")
+		}
+		lines = append(lines, dimStyle.MaxWidth(width-2).Render(meta))
+		if len(info.Tags) > 0 {
+			lines = append(lines, faintStyle.MaxWidth(width-2).Render(strings.Join(info.Tags[:min(4, len(info.Tags))], " · ")))
+		}
+	}
 	lines = append(lines, "")
 
 	if p, ok := m.progressByURL[ep.URL]; ok && p.Position > 0 {
@@ -2040,6 +2448,7 @@ func (m Model) helpView() string {
 		keyline("enter", "open / confirm"),
 		keyline("esc / q", "back / quit"),
 		keyline("ctrl+h", "toggle help"),
+		keyline("ctrl+b", "browse by genre"),
 		keyline("ctrl+p", "providers"),
 		keyline("ctrl+o", "settings"),
 		keyline("ctrl+l", "downloaded library"),
@@ -2066,7 +2475,7 @@ func (m Model) helpView() string {
 		dimStyle.MaxWidth(content - 6).Render("videos  " + m.outDir),
 		dimStyle.MaxWidth(content - 6).Render("database " + dbPath),
 	}, "\n")
-	return lipgloss.JoinVertical(lipgloss.Left,
+	parts := []string{
 		m.crumbs("Home", "help"),
 		"",
 		lipgloss.JoinHorizontal(lipgloss.Top,
@@ -2074,9 +2483,13 @@ func (m Model) helpView() string {
 			"  ",
 			panel("Playback & downloads", mediaKeys, inner, false),
 		),
-		"",
-		panel("Storage", storage, content-4, false),
-	)
+	}
+	// Short terminals cannot fit the storage panel without pushing the header
+	// off-screen; settings already shows both paths.
+	if m.height >= 28 {
+		parts = append(parts, "", panel("Storage", storage, content-4, false))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m Model) crumbs(parts ...string) string {
@@ -2114,6 +2527,8 @@ func (m *Model) layout() {
 		// Panels wrap their body at width-2 (they pad by one column); keep
 		// list lines inside that so long titles cannot add rows.
 		m.main.SetSize(max(20, leftInner-2), max(5, m.height-13))
+	} else if m.screen == screenResults && m.previewSplit() {
+		m.main.SetSize(max(20, m.resultsLeftOuter()-6), max(5, m.height-13))
 	} else {
 		m.main.SetSize(max(20, content-6), max(5, m.height-13))
 	}
@@ -2273,6 +2688,72 @@ type settingsMsg struct {
 	quality string
 	theme   string
 	err     error
+}
+
+type metaMsg struct {
+	key  string
+	info metadata.Info
+	err  error
+}
+
+type coverMsg struct {
+	key string
+	art string
+	err error
+}
+
+type browseMsg struct {
+	genre string
+	page  int
+	items []metadata.Info
+	err   error
+}
+
+// metaCmd serves a title from the SQLite cache when it is younger than
+// metaTTL, otherwise it looks it up and caches the result.
+func metaCmd(st *store.Store, meta metaProvider, title string) tea.Cmd {
+	key := metadata.Key(title)
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if st != nil {
+			payload, fetchedAt, ok, err := st.GetAnimeMeta(ctx, key)
+			if err == nil && ok && time.Since(fetchedAt) < metaTTL {
+				var info metadata.Info
+				if json.Unmarshal(payload, &info) == nil {
+					return metaMsg{key: key, info: info}
+				}
+			}
+		}
+		info, err := meta.Lookup(ctx, title)
+		if err != nil {
+			return metaMsg{key: key, err: err}
+		}
+		if st != nil {
+			if payload, err := json.Marshal(info); err == nil {
+				_ = st.PutAnimeMeta(ctx, key, string(payload))
+			}
+		}
+		return metaMsg{key: key, info: info}
+	}
+}
+
+func coverCmd(covers coverRenderer, key, url string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		art, err := covers.Render(ctx, url, coverCols, coverRows)
+		return coverMsg{key: key, art: art, err: err}
+	}
+}
+
+func browseCmd(meta metaProvider, genre string, page int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		items, err := meta.Browse(ctx, genre, page)
+		return browseMsg{genre: genre, page: page, items: items, err: err}
+	}
 }
 
 func loadSettingsCmd(st *store.Store) tea.Cmd {

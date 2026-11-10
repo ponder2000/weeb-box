@@ -2,11 +2,13 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,6 +16,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/ponder2000/weeb-box/internal/deps"
 	lib "github.com/ponder2000/weeb-box/internal/library"
+	"github.com/ponder2000/weeb-box/internal/metadata"
 	"github.com/ponder2000/weeb-box/internal/provider"
 	"github.com/ponder2000/weeb-box/internal/store"
 )
@@ -97,6 +100,81 @@ func (stubProvider) Stream(context.Context, provider.Episode) (provider.Stream, 
 }
 
 type stubProvider struct{}
+
+// fakeMeta stubs AniList without network access.
+type fakeMeta struct {
+	info    metadata.Info
+	items   []metadata.Info
+	err     error
+	lookups int
+	browses int
+	genre   string
+	page    int
+}
+
+func (f *fakeMeta) Lookup(context.Context, string) (metadata.Info, error) {
+	f.lookups++
+	return f.info, f.err
+}
+
+func (f *fakeMeta) Browse(_ context.Context, genre string, page int) ([]metadata.Info, error) {
+	f.browses++
+	f.genre, f.page = genre, page
+	return f.items, f.err
+}
+
+// fakeCover stubs terminal artwork.
+type fakeCover struct {
+	art   string
+	calls int
+}
+
+func (f *fakeCover) Render(context.Context, string, int, int) (string, error) {
+	f.calls++
+	return f.art, nil
+}
+
+func fakeArt() string {
+	rows := make([]string, coverRows)
+	for i := range rows {
+		rows[i] = strings.Repeat("ART", coverCols/3)
+	}
+	return strings.Join(rows, "\n")
+}
+
+// runCmd feeds metadata/browse/search messages into the model, expanding
+// batches. Timers and spinner ticks are dropped so tests cannot hang.
+func runCmd(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	for i := 0; i < 16 && cmd != nil; i++ {
+		switch msg := cmd().(type) {
+		case tea.BatchMsg:
+			for _, c := range msg {
+				m = runCmd(t, m, c)
+			}
+			return m
+		case metaMsg, coverMsg, browseMsg, searchMsg, episodesMsg:
+			updated, next := m.Update(msg)
+			m, cmd = updated.(Model), next
+		default:
+			return m
+		}
+	}
+	return m
+}
+
+func resultsModel(t *testing.T, fm *fakeMeta, fc *fakeCover) Model {
+	t.Helper()
+	m := New(nil, t.TempDir(), nil)
+	m.meta, m.covers = fm, fc
+	m.width, m.height = 120, 40
+	m.results = []searchResult{{provider: stubProvider{}, anime: provider.Anime{Title: "Frieren"}}}
+	m.main.SetItems(m.animeItems())
+	m.main.Select(0)
+	m.screen = screenResults
+	m.layout()
+	return m
+}
 
 type fixedProvider struct {
 	name   string
@@ -227,10 +305,31 @@ func TestViewFitsTerminal(t *testing.T) {
 		m.results = []searchResult{{provider: stubProvider{}, anime: provider.Anime{Title: strings.Repeat("long ", 20), Meta: "TV"}}}
 		m.episodes = []provider.Episode{{Number: 1, Title: strings.Repeat("long ", 20)}}
 		m.anime = m.results[0].anime
+		info := metadata.Info{
+			Title: "Frieren", Rating: "R", Genres: []string{"Adventure", "Drama", "Fantasy"},
+			Tags: []string{"Magic", "Journey", "Elves"}, CoverURL: "https://img/x.jpg",
+		}
+		key := metadata.Key(m.results[0].anime.Title)
+		m.metaCache[key] = info
+		m.coverArt[metadata.Key(info.Title)] = fakeArt()
 
 		views := map[string]func(){
 			"home":    func() { m.screen = screenHome },
 			"results": func() { m.screen = screenResults; m.main.SetItems(m.animeItems()) },
+			"genres": func() {
+				m.screen = screenGenres
+				items := make([]list.Item, 5)
+				for i, genre := range metadata.Genres[:5] {
+					items[i] = item{title: genre, desc: "popular · non-adult"}
+				}
+				m.main.SetItems(items)
+			},
+			"browse": func() {
+				m.screen = screenBrowse
+				m.browseLoad = false
+				m.browseGenre = "Drama"
+				m.main.SetItems([]list.Item{item{title: "Frieren", desc: browseDesc(info), info: info}})
+			},
 			"episodes": func() {
 				m.screen = screenEpisodes
 				m.main.SetItems([]list.Item{item{title: "E001", episode: m.episodes[0]}})
@@ -625,5 +724,187 @@ func TestBreadcrumbClickGoesHome(t *testing.T) {
 	})
 	if got := updated.(Model); got.screen != screenHome {
 		t.Fatalf("breadcrumb click left screen at %v", got.screen)
+	}
+}
+
+func TestResultsPreviewWideAndNarrow(t *testing.T) {
+	info := metadata.Info{
+		Title: "Frieren", Rating: "PG-13", Genres: []string{"Adventure", "Drama"},
+		Tags: []string{"Magic", "Journey"}, CoverURL: "https://img/x.jpg",
+	}
+	fm := &fakeMeta{info: info}
+	fc := &fakeCover{art: fakeArt()}
+	m := resultsModel(t, fm, fc)
+
+	cmd := m.ensurePreview()
+	if cmd == nil {
+		t.Fatal("selection did not start a lookup")
+	}
+	if again := m.ensurePreview(); again != nil {
+		t.Error("duplicate in-flight lookup was started")
+	}
+	if !strings.Contains(m.View(), "loading metadata") {
+		t.Error("wide results view has no loading placeholder")
+	}
+
+	m = runCmd(t, m, cmd)
+	if fm.lookups != 1 || fc.calls != 1 {
+		t.Fatalf("lookups=%d coverCalls=%d", fm.lookups, fc.calls)
+	}
+	wide := m.View()
+	if !strings.Contains(wide, "Preview") || !strings.Contains(wide, "PG-13") {
+		t.Error("wide results view is missing the preview panel")
+	}
+	if !strings.Contains(wide, strings.Repeat("ART", coverCols/3)) {
+		t.Error("wide results view is missing the cover art")
+	}
+
+	m.width, m.height = 80, 24
+	m.layout()
+	narrow := m.View()
+	if strings.Contains(narrow, strings.Repeat("ART", coverCols/3)) {
+		t.Error("narrow results view should not render the cover")
+	}
+	if strings.Contains(narrow, "Preview") {
+		t.Error("narrow results view should not render the preview panel")
+	}
+	if !strings.Contains(narrow, "PG-13") || !strings.Contains(narrow, "Adventure") {
+		t.Error("narrow results view is missing the compact metadata line")
+	}
+}
+
+func TestMetadataLookupErrorIsNonFatal(t *testing.T) {
+	fm := &fakeMeta{err: errors.New("anilist down")}
+	m := resultsModel(t, fm, &fakeCover{})
+
+	m = runCmd(t, m, m.ensurePreview())
+	if m.err != nil {
+		t.Fatalf("preview failure surfaced as an error: %v", m.err)
+	}
+	if m.screen != screenResults {
+		t.Fatalf("screen = %v", m.screen)
+	}
+	if !m.metaFailed[metadata.Key("Frieren")] {
+		t.Error("failed lookup was not recorded")
+	}
+	if cmd := m.ensurePreview(); cmd != nil {
+		t.Error("failed lookup is retried on every selection")
+	}
+}
+
+func TestGenreNavigation(t *testing.T) {
+	fm := &fakeMeta{items: []metadata.Info{{
+		Title: "Frieren", Rating: "PG-13", Genres: []string{"Adventure"}, CoverURL: "https://img/x.jpg",
+	}}}
+	fc := &fakeCover{art: fakeArt()}
+	m := New(nil, t.TempDir(), nil)
+	m.meta, m.covers = fm, fc
+	m.width, m.height = 120, 40
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	m = updated.(Model)
+	if m.screen != screenGenres || len(m.main.Items()) != len(metadata.Genres) {
+		t.Fatalf("screen=%v items=%d", m.screen, len(m.main.Items()))
+	}
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = runCmd(t, updated.(Model), cmd)
+	if fm.browses != 1 || fm.genre != metadata.Genres[0] || fm.page != 1 {
+		t.Fatalf("browse calls=%d genre=%q page=%d", fm.browses, fm.genre, fm.page)
+	}
+	if m.screen != screenBrowse || len(m.main.Items()) != 1 {
+		t.Fatalf("screen=%v items=%d", m.screen, len(m.main.Items()))
+	}
+	if !strings.Contains(m.View(), "PG-13") {
+		t.Error("browse view is missing the rating")
+	}
+
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.screen != screenGenres {
+		t.Fatalf("esc from browse = %v", m.screen)
+	}
+
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model); got.screen != screenHome {
+		t.Fatalf("esc from genres = %v", got.screen)
+	}
+}
+
+func TestBrowseTitleRunsSearch(t *testing.T) {
+	providers := []provider.Provider{fixedProvider{name: "alpha", animes: []provider.Anime{{Title: "Frieren"}}}}
+	fm := &fakeMeta{items: []metadata.Info{{Title: "Frieren", Rating: "R"}}}
+	m := New(providers, t.TempDir(), nil)
+	m.meta, m.covers = fm, &fakeCover{}
+	m.width, m.height = 80, 24
+
+	m.screen = screenBrowse
+	m.browseGenre = "Drama"
+	m.main.SetItems([]list.Item{item{title: "Frieren", info: fm.items[0]}})
+	m.main.Select(0)
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.screen != screenBusy || m.busy != busySearch {
+		t.Fatalf("screen=%v busy=%v", m.screen, m.busy)
+	}
+	if m.search.Value() != "Frieren" {
+		t.Fatalf("search value = %q", m.search.Value())
+	}
+
+	m = runCmd(t, m, cmd)
+	if m.screen != screenResults || len(m.results) != 1 || m.results[0].anime.Title != "Frieren" {
+		t.Fatalf("screen=%v results=%#v", m.screen, m.results)
+	}
+}
+
+func TestMetadataCacheHitSkipsLookup(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "meta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+	payload, err := json.Marshal(metadata.Info{Title: "Cached Frieren", Rating: "R", Genres: []string{"Drama"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutAnimeMeta(ctx, metadata.Key("Frieren"), string(payload)); err != nil {
+		t.Fatal(err)
+	}
+
+	fm := &fakeMeta{info: metadata.Info{Title: "Fresh"}}
+	msg := metaCmd(st, fm, "Frieren")().(metaMsg)
+	if msg.err != nil || msg.info.Title != "Cached Frieren" {
+		t.Fatalf("cached msg = %#v", msg)
+	}
+	if fm.lookups != 0 {
+		t.Fatalf("cache hit still called Lookup %d time(s)", fm.lookups)
+	}
+
+	msg = metaCmd(st, fm, "Uncached Frieren")().(metaMsg)
+	if msg.err != nil || fm.lookups != 1 || msg.info.Title != "Fresh" {
+		t.Fatalf("uncached msg = %#v lookups=%d", msg, fm.lookups)
+	}
+	if _, fetchedAt, ok, err := st.GetAnimeMeta(ctx, metadata.Key("Uncached Frieren")); err != nil || !ok || time.Since(fetchedAt) > time.Minute {
+		t.Fatalf("lookup was not cached: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestBrowseErrorIsFatal(t *testing.T) {
+	fm := &fakeMeta{err: errors.New("anilist down")}
+	m := New(nil, t.TempDir(), nil)
+	m.meta = fm
+	m.width, m.height = 80, 24
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	updated, cmd := updated.(Model).handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = runCmd(t, updated.(Model), cmd)
+	if m.err == nil {
+		t.Fatal("browse failure was not surfaced")
+	}
+	if m.screen != screenGenres {
+		t.Fatalf("screen = %v", m.screen)
 	}
 }
