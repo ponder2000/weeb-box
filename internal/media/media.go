@@ -188,6 +188,23 @@ func (p *Player) Start(ctx context.Context) error {
 	return nil
 }
 
+// Quit asks mpv to exit with code, which the TUI uses to request the next or
+// previous episode from the terminal.
+func (p *Player) Quit(code int) error {
+	if p == nil || p.socket == "" {
+		return errors.New("player has no IPC socket")
+	}
+	client, err := dialIPC(context.Background(), p.socket)
+	if err != nil {
+		return err
+	}
+	defer client.conn.Close()
+	payload, _ := json.Marshal(map[string]any{"command": []any{"quit", code}})
+	client.conn.SetDeadline(time.Now().Add(2 * time.Second))
+	_, err = client.conn.Write(append(payload, '\n'))
+	return err
+}
+
 // Wait blocks until the player exits.
 func (p *Player) Wait() error {
 	if p == nil || !p.started {

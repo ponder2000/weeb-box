@@ -1,13 +1,17 @@
 package media
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -292,5 +296,44 @@ func TestProgressSample(t *testing.T) {
 	}
 	if p.ETA < 37*time.Second || p.ETA > 38*time.Second {
 		t.Errorf("eta = %v", p.ETA)
+	}
+}
+
+func TestPlayerQuitSendsCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix sockets only")
+	}
+	sock := filepath.Join(t.TempDir(), "mpv.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	got := make(chan map[string]any, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		line, _ := bufio.NewReader(conn).ReadBytes('\n')
+		var cmd map[string]any
+		if json.Unmarshal(line, &cmd) == nil {
+			got <- cmd
+		}
+	}()
+
+	p := &Player{socket: sock}
+	if err := p.Quit(ExitNext); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case cmd := <-got:
+		parts, _ := cmd["command"].([]any)
+		if len(parts) != 2 || parts[0] != "quit" || parts[1] != float64(ExitNext) {
+			t.Fatalf("command = %#v", cmd)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("mpv did not receive quit")
 	}
 }

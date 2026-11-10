@@ -1300,13 +1300,13 @@ func TestPlayWithKeepsTUIAndRestoresScreen(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("no wait command")
 	}
-	if model.screen != screenEpisodes {
+	if model.screen != screenPlaying {
 		t.Fatalf("screen while playing = %v", model.screen)
 	}
 	if model.playCancel == nil || model.player != player {
 		t.Fatal("playback state not tracked")
 	}
-	if !strings.Contains(model.status, "TUI stays") {
+	if !strings.Contains(model.status, "Playing in mpv") {
 		t.Errorf("status = %q", model.status)
 	}
 
@@ -1316,7 +1316,11 @@ func TestPlayWithKeepsTUIAndRestoresScreen(t *testing.T) {
 		t.Fatal("started a second player")
 	}
 
-	msg, ok := cmd().(playbackDoneMsg)
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("playWith returned %T", cmd())
+	}
+	msg, ok := batch[0]().(playbackDoneMsg)
 	if !ok {
 		t.Fatalf("wait returned %T", msg)
 	}
@@ -1559,6 +1563,19 @@ func TestShiftTabCyclesMainScreens(t *testing.T) {
 		}
 	}
 
+	// The live player joins the cycle after Home.
+	m.player = &media.Player{}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = updated.(Model)
+	if m.screen != screenPlaying {
+		t.Fatalf("shift+tab with a player = %v, want playing", m.screen)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if got := updated.(Model).screen; got != screenGenres {
+		t.Fatalf("shift+tab after playing = %v, want genres", got)
+	}
+	m.player = nil
+
 	// Results, episodes and a genre's title list resume at the next flow.
 	for _, from := range []screen{screenResults, screenEpisodes, screenBrowse} {
 		m.screen = from
@@ -1682,7 +1699,7 @@ func TestHomeRowsCompactRender(t *testing.T) {
 	}
 }
 
-func TestHomeClickUsesOneLineRows(t *testing.T) {
+func TestHomeClickRowHeights(t *testing.T) {
 	m := New(nil, t.TempDir(), nil)
 	m.width, m.height = 120, 40
 	items := make([]list.Item, 4)
@@ -1702,7 +1719,7 @@ func TestHomeClickUsesOneLineRows(t *testing.T) {
 		return updated.(Model)
 	}
 
-	got := click(m.leftMargin()+2, m.bodyOffset()+panelsTop+2+2)
+	got := click(m.leftMargin()+2, m.bodyOffset()+panelsTop+2+4)
 	if got.focus != focusResume || got.resume.Index() != 2 {
 		t.Fatalf("resume click: focus=%v index=%d", got.focus, got.resume.Index())
 	}
@@ -1937,4 +1954,91 @@ func runHome(t *testing.T, m Model) Model {
 	msg := loadHomeCmd(m.st, m.libraryDir)()
 	updated, _ := m.Update(msg)
 	return updated.(Model)
+}
+
+func TestPlayingViewShowsProgress(t *testing.T) {
+	m := New([]provider.Provider{stubProvider{}}, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	m.screen, m.playReturn = screenPlaying, screenEpisodes
+	m.quality = "1080p"
+	m.prov = stubProvider{}
+	m.anime = provider.Anime{Title: "Frieren", URL: "a"}
+	m.episodes = []provider.Episode{
+		{Number: 5, URL: "e5", Title: "The Journey"},
+		{Number: 6, URL: "e6", Title: "Next Stop"},
+	}
+	m.playInfo = playbackInfo{
+		Provider: "gogoanime", AnimeURL: "a", EpisodeURL: "e5",
+		AnimeTitle: "Frieren", EpisodeNumber: 5,
+	}
+	m.playProg = &playProgress{}
+	m.playProg.set(600, 1440)
+	m.layout()
+
+	view := ansiSeq.ReplaceAllString(m.View(), "")
+	for _, want := range []string{
+		"Now playing", "Frieren", "E005", "The Journey",
+		"42%", "10:00 / 24:00", "gogoanime", "1080p", "next E006",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("playing view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestPReopensPlayingStats(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	m.screen, m.playReturn = screenEpisodes, screenEpisodes
+	m.player = &media.Player{}
+	m.playInfo = playbackInfo{AnimeTitle: "Frieren", EpisodeNumber: 1}
+
+	updated, _ := m.handleKey(runeKey('p'))
+	if got := updated.(Model).screen; got != screenPlaying {
+		t.Fatalf("screen after p = %v", got)
+	}
+
+	// esc leaves the stats without stopping playback.
+	updated, _ = updated.(Model).handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model).screen; got != screenEpisodes {
+		t.Fatalf("screen after esc = %v", got)
+	}
+
+	// p is text in the Home search box.
+	m.screen, m.focus = screenHome, focusSearch
+	m.search.Focus()
+	updated, _ = m.handleKey(runeKey('p'))
+	if got := updated.(Model).search.Value(); got != "p" {
+		t.Fatalf("search value = %q", got)
+	}
+}
+
+func TestPlayingSkipKeys(t *testing.T) {
+	m := New([]provider.Provider{stubProvider{}}, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	m.screen = screenPlaying
+	m.prov = stubProvider{}
+	m.anime = provider.Anime{URL: "a"}
+	m.episodes = []provider.Episode{{Number: 1, URL: "e1"}, {Number: 2, URL: "e2"}}
+	m.playInfo = playbackInfo{AnimeURL: "a", EpisodeURL: "e1", EpisodeNumber: 1}
+	m.player = &media.Player{}
+
+	// ] asks for the next episode; without a socket it reports the IPC failure.
+	updated, _ := m.handleKey(runeKey(']'))
+	if got := updated.(Model).status; !strings.Contains(got, "IPC") {
+		t.Fatalf("next status = %q", got)
+	}
+
+	// p on the stats screen is previous, not the reopen shortcut.
+	m.playInfo.EpisodeURL, m.playInfo.EpisodeNumber = "e2", 2
+	updated, _ = m.handleKey(runeKey('p'))
+	if got := updated.(Model).status; !strings.Contains(got, "IPC") {
+		t.Fatalf("prev status = %q", got)
+	}
+
+	// No next episode is reported before touching the player.
+	updated, _ = m.handleKey(runeKey(']'))
+	if got := updated.(Model).status; !strings.Contains(got, "No next episode") {
+		t.Fatalf("last episode status = %q", got)
+	}
 }

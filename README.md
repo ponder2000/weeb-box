@@ -44,7 +44,7 @@ the same status and commands. Press `r` to recheck after installing, or
 
 ## Keys
 
-Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `shift+tab` cycles Home → Browse → Library → Downloads → Providers → Settings → Home. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+b` browses genres; `ctrl+o` opens Settings.
+Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `shift+tab` cycles Home → Browse → Library → Downloads → Providers → Settings → Home, and inserts **Now playing** after Home while a player is open. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+b` browses genres; `ctrl+o` opens Settings.
 
 | screen  | keys |
 | ------- | ---- |
@@ -52,6 +52,7 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 | home — continue watching / recent searches | `↑`/`↓` move, `enter` resume or re-run search, `x` remove the selected anime or query, `tab` next list, `esc` or `/` back to search box, `ctrl+r` clear search history (recent searches only), `q` quit |
 | results | `↑`/`↓` move, `enter` open episodes, `i` view cover, `v` view download queue, `esc` home |
 | episodes | `↑`/`↓` move, `enter` play, `d` download selected, `a` download from selected to the end, `i` view cover, `v` view queue, `esc` back |
+| playing | `[`/`]` previous/next episode, `n`/`p` same on this screen, `esc` back to the previous screen, `p` reopens the stats from other screens |
 | downloads | `x` cancel, `r` retry last failed episode, `o` open folder, `esc` back |
 | library | `↑`/`↓` move, `enter` play the local file, `o` open folder, `r` rescan, `esc` home |
 | providers | `space`/`enter` enable or disable, `r` refresh status, `esc` back |
@@ -61,15 +62,15 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 
 Only one download job runs at a time; starting a queue stops at the first failure. `r` retries only the last failed episode, not a cancelled queue.
 
-Playback opens mpv in its own window while the TUI keeps running in the terminal. mpv runs without terminal input (`--terminal=no`), so its keys control the window, and closing it returns to the TUI. mpv gets the OSC, resume, live progress, and the default subtitle track (English when available); `v` hides/shows subtitles, `j` cycles tracks, and the uosc CC button toggles them. ffplay gets basic keyboard controls but no live progress or subtitles. `q`/`ctrl+c` in the TUI closes the player. mpv streams HLS on demand with a short forward buffer (around 15–30 seconds), so it does not fetch the whole episode ahead of time.
+Playback opens mpv in its own window and switches the TUI to a **Now playing** screen: anime, episode title, a live progress bar, position/duration, provider, quality, and the next episode. `[`/`]` switch episodes from the TUI (`n`/`p` also work on that screen); in the mpv window `>`/`<` or `n`/`p` do the same. `esc` leaves the stats without stopping playback, and `p` reopens them from another screen while the player is open. Closing mpv returns to the previous screen. mpv gets the OSC, resume, live progress, and the default subtitle track (English when available); `v` hides/shows subtitles, `j` cycles tracks, and the uosc CC button toggles them. ffplay gets basic keyboard controls but no live progress or subtitles. `q`/`ctrl+c` in the TUI closes the player. mpv streams HLS on demand with a short forward buffer (around 15–30 seconds), so it does not fetch the whole episode ahead of time.
 
 For a modern control bar, install [uosc](https://github.com/tomasklaen/uosc) and copy `themes/mpv/uosc.conf` to `~/.config/mpv/script-opts/uosc.conf`. The app auto-detects uosc and disables the built-in OSC; the theme replaces `master.m3u8` with the anime/episode title. Re-copy that config after updating to pick up the CC toggle.
 
 Mouse: wheel scrolls the list under the pointer; click a row to select it, click it again (or double-click) to open/play. On the episode detail panel, clicking Play/Download/Download-from-here runs that action. Terminal text selection may need Shift or Option while mouse reporting is on.
 
-The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete. Long titles auto-scroll horizontally in search results, the library, and the download queue; Home rows truncate with `…` so their columns stay aligned.
+The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete. Long titles auto-scroll horizontally in search results, resume rows, the library, and the download queue; recent-search rows truncate with `…` so their time column stays aligned.
 
-Rows are color-coded: each provider has its own color, and type (`TV`, `ONA`, `Movie`…), audio (`Sub`/`Dub`), status (`Completed`/`Ongoing`/`Upcoming`), ratings, watch progress, `downloaded`, and `subs` badges use separate colors. The Mono theme collapses these to greys. `Continue watching` uses one line per anime with a fixed title column, progress bar, percentage, current episode, and the number of episodes with progress; the list is sorted by the most recently watched anime. `Recent searches` uses the same aligned layout with the time on the right. Both panels show more items and grow with the window.
+Rows are color-coded: each provider has its own color, and type (`TV`, `ONA`, `Movie`…), audio (`Sub`/`Dub`), status (`Completed`/`Ongoing`/`Upcoming`), ratings, watch progress, `downloaded`, and `subs` badges use separate colors. The Mono theme collapses these to greys. `Continue watching` gives each anime a two-line entry — title, then an aligned bar, percentage, current episode, and the number of episodes with progress — and sorts by the most recently watched anime. `Recent searches` keeps one aligned line per query with the time on the right. Both panels grow with the window, and list names are not bold; colors carry the hierarchy.
 
 ## Storage
 

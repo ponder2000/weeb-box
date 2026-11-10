@@ -39,6 +39,7 @@ const (
 	screenGenres
 	screenBrowse
 	screenEpisodes
+	screenPlaying
 	screenDownloads
 	screenLibrary
 	screenProviders
@@ -165,6 +166,13 @@ func scrollTickCmd() tea.Cmd {
 	return tea.Tick(160*time.Millisecond, func(time.Time) tea.Msg { return scrollTickMsg{} })
 }
 
+// playbackTickMsg repaints the now-playing screen while the player runs.
+type playbackTickMsg struct{}
+
+func playbackTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return playbackTickMsg{} })
+}
+
 // tokenKind is a semantic color role. Styles resolve at render time so a theme
 // change repaints items that were built under the previous palette.
 type tokenKind int
@@ -235,7 +243,7 @@ func (d marqueeDelegate) Render(w io.Writer, m list.Model, index int, data list.
 	isSelected := index == m.Index()
 	emptyFilter := m.FilterState() == list.Filtering && m.FilterValue() == ""
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorFor(it.titleKind))
+	titleStyle := lipgloss.NewStyle().Foreground(colorFor(it.titleKind))
 	marker := "  "
 	switch {
 	case emptyFilter:
@@ -425,10 +433,11 @@ func episodeCount(n int) string {
 	return fmt.Sprintf("%d eps", n)
 }
 
-func progressBlocks(ratio float64) string {
-	const width = 4
+func progressBlocks(ratio float64) string { return progressBar(ratio, 4) }
+
+func progressBar(ratio float64, width int) string {
 	ratio = math.Max(0, math.Min(1, ratio))
-	filled := int(math.Round(ratio * width))
+	filled := int(math.Round(ratio * float64(width)))
 	return strings.Repeat("▰", filled) + strings.Repeat("▱", width-filled)
 }
 
@@ -687,6 +696,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, scrollTickCmd()
 
+	case playbackTickMsg:
+		if m.player == nil {
+			return m, nil
+		}
+		return m, playbackTickCmd()
+
 	case depsMsg:
 		m.deps = deps.Report(msg)
 		if m.deps.NeedsSetup() && !m.setupShown {
@@ -742,6 +757,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			resume[i] = item{
 				title: p.AnimeTitle,
 				desc:  fmt.Sprintf("E%03d · %s · %s / %s", p.EpisodeNumber, progressPct(p), clock(p.Position), clock(p.Duration)),
+				sep:   "  ",
 				tokens: []token{
 					{text: bar, kind: kind, width: 4},
 					{text: pct, kind: kind, width: 4, right: true},
@@ -1106,6 +1122,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.screen != screenBusy && key == "shift+tab" {
 		return m.cycleScreen()
 	}
+	// p returns to the live playback stats while a player is open. It is a
+	// page key in Browse and text in the Home search box.
+	if m.player != nil && key == "p" && m.screen != screenBrowse && m.screen != screenPlaying &&
+		m.screen != screenHelp && m.screen != screenSettings && !(m.screen == screenHome && m.focus == focusSearch) {
+		m.screen = screenPlaying
+		m.layout()
+		return m, nil
+	}
 
 	if key == "ctrl+h" || (key == "?" && !(m.screen == screenHome && m.focus == focusSearch)) {
 		if m.screen == screenHelp {
@@ -1425,6 +1449,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case screenPlaying:
+		switch key {
+		case "esc", "left", "backspace":
+			m.screen = m.playReturn
+			m.layout()
+		case "]", "n":
+			return m.skipEpisode(media.ExitNext)
+		case "[", "p":
+			return m.skipEpisode(media.ExitPrev)
+		}
+		return m, nil
+
 	case screenCover:
 		switch key {
 		case "esc", "enter", "left", "backspace":
@@ -1460,6 +1496,75 @@ func removeListRow(l *list.Model) {
 	if index >= 0 {
 		l.Select(index)
 	}
+}
+
+// playingView reports the live episode, progress, and where playback goes next.
+func (m Model) playingView() string {
+	content := m.viewWidth()
+	inner := max(20, content-4)
+	info := m.playInfo
+	title := info.AnimeTitle
+	if title == "" {
+		title = "Unknown title"
+	}
+
+	pos, dur, ok := 0.0, 0.0, false
+	if m.playProg != nil {
+		pos, dur, ok = m.playProg.current()
+	}
+	if dur <= 0 {
+		dur = info.Duration
+	}
+	episode := fmt.Sprintf("E%03d", info.EpisodeNumber)
+	if name := m.episodeLabel(info); name != "" {
+		episode += " · " + name
+	}
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Foreground(colorText).MaxWidth(inner-2).Render(title))
+	lines = append(lines, dimStyle.Render(episode))
+	if dur > 0 {
+		ratio := math.Max(0, math.Min(1, pos/dur))
+		lines = append(lines, "", progressBar(ratio, 24)+"  "+fmt.Sprintf("%.0f%%", ratio*100))
+		lines = append(lines, dimStyle.Render(clock(pos)+" / "+clock(dur)))
+		if !ok {
+			lines = append(lines, faintStyle.Render("waiting for player position…"))
+		}
+	} else {
+		lines = append(lines, "", dimStyle.Render("Waiting for the player…"))
+	}
+
+	var meta []string
+	if info.Provider != "" {
+		meta = append(meta, info.Provider)
+	}
+	if m.quality != "" {
+		meta = append(meta, m.quality)
+	}
+	if next, ok := m.siblingEpisode(info, 1); ok {
+		meta = append(meta, fmt.Sprintf("next E%03d", next.Number))
+	} else {
+		meta = append(meta, "last episode")
+	}
+	lines = append(lines, "", dimStyle.Render(strings.Join(meta, " · ")))
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.crumbs("Home", "playing"),
+		"",
+		panel("Now playing", strings.Join(lines, "\n"), inner, true),
+	)
+}
+
+// episodeLabel finds the title of the playing episode in the current list.
+func (m Model) episodeLabel(info playbackInfo) string {
+	if m.anime.URL == info.AnimeURL {
+		for _, ep := range m.episodes {
+			if ep.URL == info.EpisodeURL {
+				return ep.Title
+			}
+		}
+	}
+	return ""
 }
 
 func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1660,23 +1765,35 @@ func (m Model) openSettings() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// mainScreens is the shift+tab rotation order.
-var mainScreens = []screen{screenHome, screenGenres, screenLibrary, screenDownloads, screenProviders, screenSettings}
+// mainScreens is the shift+tab rotation order. The live player joins the cycle
+// after Home while it is open.
+func (m Model) mainScreens() []screen {
+	screens := []screen{screenHome, screenGenres, screenLibrary, screenDownloads, screenProviders, screenSettings}
+	if m.player != nil {
+		screens = append(screens[:1], append([]screen{screenPlaying}, screens[1:]...)...)
+	}
+	return screens
+}
 
 // cycleScreen moves to the next top-level screen. Results, episodes and a
 // genre's title list belong to the search/browse flow, so they rotate on to
 // the screen after their flow.
 func (m Model) cycleScreen() (tea.Model, tea.Cmd) {
+	screens := m.mainScreens()
 	index := 0
-	for i, s := range mainScreens {
+	for i, s := range screens {
 		if m.screen == s {
 			index = i
 			break
 		}
 	}
-	switch mainScreens[(index+1)%len(mainScreens)] {
+	switch screens[(index+1)%len(screens)] {
 	case screenHome:
 		return m.goHome()
+	case screenPlaying:
+		m.screen, m.err = screenPlaying, nil
+		m.layout()
+		return m, nil
 	case screenGenres:
 		return m.openGenres()
 	case screenLibrary:
@@ -1977,7 +2094,7 @@ func (m Model) previewBody(selected item, width int) string {
 	if name == "" {
 		name = title
 	}
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorText).MaxWidth(width).Render(name))
+	lines = append(lines, lipgloss.NewStyle().Foreground(colorText).MaxWidth(width).Render(name))
 	badge := ratingBadge(info)
 	if info.Adult {
 		lines = append(lines, errStyle.Render(badge))
@@ -2214,7 +2331,11 @@ func (m Model) clickHome(bx, by int) (tea.Model, tea.Cmd) {
 	if by < panelsTop+2 {
 		return m, nil
 	}
-	cmd := m.clickListRows(target, by, panelsTop+2, screenHome, 1)
+	rows := 1
+	if targetFocus == focusResume {
+		rows = 2
+	}
+	cmd := m.clickListRows(target, by, panelsTop+2, screenHome, rows)
 	return m, cmd
 }
 
@@ -2325,8 +2446,7 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 			Position: start, Duration: info.Duration,
 		})
 	}
-	// The TUI keeps running while mpv is open, so show where we came from.
-	m.screen = m.playReturn
+	// The TUI keeps running while mpv is open.
 	if err := player.Start(ctx); err != nil {
 		cancel()
 		m.playCancel = nil
@@ -2350,8 +2470,10 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 			Position: position, Duration: duration,
 		})
 	})
-	m.status = "Playing in mpv — TUI stays; >/< or n/p next/prev"
-	return m, func() tea.Msg {
+	m.screen = screenPlaying
+	m.layout()
+	m.status = "Playing in mpv — [ ] prev/next in the TUI, >/< in the player"
+	wait := func() tea.Msg {
 		err := player.Wait()
 		if ctx.Err() != nil {
 			// Cancelled by quit/ctrl+c; that is not a playback failure.
@@ -2359,6 +2481,7 @@ func (m Model) playWith(player *media.Player, info playbackInfo, start float64) 
 		}
 		return playbackDoneMsg{err: err}
 	}
+	return m, tea.Batch(wait, playbackTickCmd())
 }
 
 // playProgress shares the live mpv position with the TUI: the Model is copied
@@ -2389,6 +2512,13 @@ func (p *playProgress) duration() float64 {
 	return p.dur
 }
 
+// current returns the latest sample; ok is false until mpv reports a duration.
+func (p *playProgress) current() (pos, dur float64, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pos, p.dur, p.ok
+}
+
 // siblingEpisode returns the episode before or after info in the current list.
 // It refuses lists that belong to another anime, so next/prev does nothing when
 // playback was resumed from Home.
@@ -2406,6 +2536,33 @@ func (m Model) siblingEpisode(info playbackInfo, step int) (provider.Episode, bo
 		return provider.Episode{}, false
 	}
 	return provider.Episode{}, false
+}
+
+// skipEpisode asks the running player to exit with the next/prev code; the
+// playbackDoneMsg path then resolves the sibling.
+func (m Model) skipEpisode(code int) (tea.Model, tea.Cmd) {
+	if m.player == nil {
+		return m, nil
+	}
+	step := 1
+	if code == media.ExitPrev {
+		step = -1
+	}
+	ep, ok := m.siblingEpisode(m.playInfo, step)
+	if !ok {
+		if step < 0 {
+			m.status = "No previous episode"
+		} else {
+			m.status = "No next episode"
+		}
+		return m, nil
+	}
+	if err := m.player.Quit(code); err != nil {
+		m.status = "Player: " + err.Error()
+		return m, nil
+	}
+	m.status = fmt.Sprintf("Switching to E%03d…", ep.Number)
+	return m, nil
 }
 
 // playEpisode resolves and starts an episode from the current list.
@@ -2541,6 +2698,8 @@ func (m Model) bodyView() string {
 		body = m.browseView()
 	case screenEpisodes:
 		body = m.episodesView()
+	case screenPlaying:
+		body = m.playingView()
 	case screenDownloads:
 		body = m.downloadsView()
 	case screenLibrary:
@@ -2608,6 +2767,8 @@ func (m Model) screenName() string {
 		return "browse"
 	case screenEpisodes:
 		return "episodes"
+	case screenPlaying:
+		return "playing"
 	case screenDownloads:
 		return "downloads"
 	case screenLibrary:
@@ -2646,6 +2807,8 @@ func (m Model) footer() string {
 		items = []string{hint("↑↓", "move"), hint("enter", "episodes"), hint("i", "cover"), hint("ctrl+b", "browse"), hint("esc", "back")}
 	case screenEpisodes:
 		items = []string{hint("enter", "play"), hint("d", "download"), hint("a", "rest"), hint("i", "cover"), hint("v", "queue"), hint("esc", "back")}
+	case screenPlaying:
+		items = []string{hint("[ ]", "prev / next"), hint("esc", "back")}
 	case screenDownloads:
 		items = []string{hint("x", "cancel"), hint("r", "retry"), hint("o", "folder"), hint("esc", "back")}
 	case screenLibrary:
@@ -2666,6 +2829,10 @@ func (m Model) footer() string {
 		}
 	case screenCover:
 		items = []string{hint("esc", "back")}
+	}
+	if m.player != nil && m.screen != screenPlaying && m.screen != screenBrowse && m.screen != screenHelp &&
+		m.screen != screenSettings && !(m.screen == screenHome && m.focus == focusSearch) {
+		items = append(items, hint("p", "now playing"))
 	}
 	if m.screen != screenBusy && m.screen != screenHelp && m.screen != screenSetup && m.screen != screenCover && !(m.screen == screenSettings && m.dirEditing) {
 		items = append(items, hint("⇧tab", "screens"))
@@ -2934,7 +3101,7 @@ func (m Model) coverView() string {
 	if name == "" {
 		name = "Cover"
 	}
-	lines := []string{art, "", lipgloss.NewStyle().Bold(true).Foreground(colorText).MaxWidth(inner - 2).Render(name)}
+	lines := []string{art, "", lipgloss.NewStyle().Foreground(colorText).MaxWidth(inner - 2).Render(name)}
 	badge := ratingBadge(m.coverInfo)
 	if m.coverInfo.Adult {
 		lines = append(lines, errStyle.Render(badge))
@@ -2988,7 +3155,7 @@ func (m Model) detailView(ep provider.Episode, width int) string {
 	if title == "" {
 		title = fmt.Sprintf("Episode %d", ep.Number)
 	}
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorText).MaxWidth(width-2).Render(title))
+	lines = append(lines, lipgloss.NewStyle().Foreground(colorText).MaxWidth(width-2).Render(title))
 	lines = append(lines, dimStyle.MaxWidth(width-2).Render(m.anime.Title))
 	if info, ok := m.metaCache[metadata.Key(m.anime.Title)]; ok {
 		meta := ratingBadge(info)
@@ -3308,6 +3475,8 @@ func (m Model) helpView() string {
 		keyline("enter", "open / confirm"),
 		keyline("esc / q", "back / quit"),
 		keyline("ctrl+h", "toggle help"),
+		keyline("p", "now-playing stats"),
+		keyline("[ ]", "previous / next episode"),
 		keyline("x", "remove Home row"),
 		keyline("ctrl+b", "browse by genre"),
 		keyline("ctrl+p", "providers"),
@@ -4034,7 +4203,7 @@ func (m *Model) refreshTheme() {
 	m.search.PlaceholderStyle = lipgloss.NewStyle().Foreground(colorFaint)
 	m.spinner.Style = lipgloss.NewStyle().Foreground(colorAccent)
 	delegate := newThemedDelegate(m.scroll)
-	m.resume.SetDelegate(newCompactDelegate(m.scroll))
+	m.resume.SetDelegate(delegate)
 	m.recent.SetDelegate(newCompactDelegate(m.scroll))
 	m.main.SetDelegate(delegate)
 }
