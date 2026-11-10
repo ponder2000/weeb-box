@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS provider_state (
 	last_ok    INTEGER NOT NULL DEFAULT 0,
 	last_error TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
 
 func DefaultPath() (string, error) {

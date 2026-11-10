@@ -37,8 +37,12 @@ type Progress struct {
 }
 
 // Download writes src to dest using ffmpeg. It writes dest.part first so an
-// interrupted download never masquerades as a complete episode.
-func Download(ctx context.Context, src provider.Stream, dest string, onProgress func(Progress)) error {
+// interrupted download never masquerades as a complete episode. quality is
+// forwarded to SelectQuality; a failed pick keeps the master playlist.
+func Download(ctx context.Context, src provider.Stream, dest string, quality string, onProgress func(Progress)) error {
+	if selected, err := SelectQuality(ctx, nil, src, quality); err == nil {
+		src = selected
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -152,7 +156,11 @@ func (p *Player) Cleanup() {
 
 // Play starts mpv when available, otherwise ffplay. start is a resume position
 // in seconds. Only mpv exposes live progress and external subtitle files.
-func Play(ctx context.Context, src provider.Stream, title string, start float64) (*Player, error) {
+// quality is forwarded to SelectQuality; a failed pick keeps the master playlist.
+func Play(ctx context.Context, src provider.Stream, title string, start float64, quality string) (*Player, error) {
+	if selected, err := SelectQuality(ctx, nil, src, quality); err == nil {
+		src = selected
+	}
 	dir, socket, err := playerDir()
 	if err != nil {
 		return nil, err
@@ -328,6 +336,21 @@ func OpenFolder(path string) error {
 		cmd = exec.Command("explorer", path)
 	default:
 		cmd = exec.Command("xdg-open", path)
+	}
+	return cmd.Start()
+}
+
+// OpenURL opens a link in the user's default browser.
+func OpenURL(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		// start is a cmd builtin and needs the empty title argument.
+		cmd = exec.Command("cmd", "/c", "start", "", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
 	}
 	return cmd.Start()
 }

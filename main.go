@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ponder2000/weeb-box/internal/deps"
@@ -50,6 +52,17 @@ func main() {
 	}
 	defer st.Close()
 
+	// The saved setting fills in only when the flag is absent; -dir wins.
+	if *outDir == "" {
+		if saved, err := st.GetSetting(context.Background(), "download_dir", ""); err == nil && strings.TrimSpace(saved) != "" {
+			dir = strings.TrimSpace(saved)
+		}
+	}
+	libDir := *libraryDir
+	if libDir == "" {
+		libDir = dir
+	}
+
 	providers := []provider.Provider{
 		gogo.New(*baseURL),
 		animekai.New(""),
@@ -57,7 +70,7 @@ func main() {
 		kissanime.New(""),
 		hianime.New(""),
 	}
-	model := tui.New(providers, dir, st).SetLibrary(*libraryDir)
+	model := tui.New(providers, dir, st).SetLibrary(libDir)
 	program := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),

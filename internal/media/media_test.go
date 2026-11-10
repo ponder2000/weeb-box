@@ -94,7 +94,7 @@ func TestDownloadLocalHLS(t *testing.T) {
 
 	dest := filepath.Join(t.TempDir(), "out.mp4")
 	var maxBytes int64
-	err := Download(context.Background(), provider.Stream{URL: server.URL + "/index.m3u8"}, dest, func(p Progress) {
+	err := Download(context.Background(), provider.Stream{URL: server.URL + "/index.m3u8"}, dest, "", func(p Progress) {
 		if p.Bytes > maxBytes {
 			maxBytes = p.Bytes
 		}

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,6 +116,19 @@ func (f fixedProvider) Stream(context.Context, provider.Episode) (provider.Strea
 	return provider.Stream{}, nil
 }
 
+func TestExpandPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	if got := expandPath("~/Videos/anime"); got != filepath.Join(home, "Videos/anime") {
+		t.Fatalf("expandPath = %q", got)
+	}
+	if got := expandPath("/tmp/plain"); got != "/tmp/plain" {
+		t.Fatalf("plain = %q", got)
+	}
+}
+
 func TestScrollText(t *testing.T) {
 	if got := scrollText("short", 5, 10); got != "short" {
 		t.Fatalf("short = %q", got)
@@ -201,6 +215,11 @@ func TestViewFitsTerminal(t *testing.T) {
 				m.screen = screenProviders
 				m.main.SetItems(m.providerItems())
 				m.providerLoading = false
+			},
+			"settings": func() {
+				m.screen = screenSettings
+				m.dirEditing = false
+				m.settingsRow = settingsDir
 			},
 			"setup": func() {
 				m.screen = screenSetup
@@ -320,6 +339,90 @@ func TestMouseSelectsResumeAndWheelMovesList(t *testing.T) {
 	}
 }
 
+func TestQualitySettingLoadCyclePersist(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	if m.quality != "auto" {
+		t.Fatalf("default quality = %q", m.quality)
+	}
+	m.cycleQuality(1)
+	m.cycleQuality(1)
+	if m.quality != "720p" {
+		t.Fatalf("cycled quality = %q", m.quality)
+	}
+	m.cycleQuality(-1)
+	if m.quality != "1080p" {
+		t.Fatalf("cycled back = %q", m.quality)
+	}
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	msg := loadSettingsCmd(st)().(settingsMsg)
+	if msg.quality != "auto" {
+		t.Fatalf("loaded default = %q", msg.quality)
+	}
+
+	persisted := New(nil, t.TempDir(), st)
+	persisted.quality = "720p"
+	persisted.cycleQuality(1)
+	if persisted.quality != "480p" {
+		t.Fatalf("persisted quality = %q", persisted.quality)
+	}
+	if got, _ := st.GetSetting(context.Background(), "quality", ""); got != "480p" {
+		t.Fatalf("stored quality = %q", got)
+	}
+	if got := loadSettingsCmd(st)().(settingsMsg).quality; got != "480p" {
+		t.Fatalf("reloaded quality = %q", got)
+	}
+
+	updated, _ := New(nil, t.TempDir(), nil).Update(settingsMsg{quality: "1080p"})
+	if got := updated.(Model).quality; got != "1080p" {
+		t.Fatalf("settings msg quality = %q", got)
+	}
+}
+
+func TestSettingsDirSaveUpdatesLibraryAndStore(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	old := t.TempDir()
+	m := New(nil, old, st)
+	m.width, m.height = 80, 24
+	m.screen = screenSettings
+	m.settingsRow = settingsDir
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+	if !got.dirEditing {
+		t.Fatal("enter did not start editing the directory")
+	}
+
+	next := filepath.Join(t.TempDir(), "elsewhere")
+	got.dirInput.SetValue(next)
+	updated, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got = updated.(Model)
+	if got.dirEditing || got.outDir != next || got.libraryDir != next {
+		t.Fatalf("editing=%v outDir=%q libraryDir=%q", got.dirEditing, got.outDir, got.libraryDir)
+	}
+	if saved, _ := st.GetSetting(context.Background(), "download_dir", ""); saved != next {
+		t.Fatalf("stored download_dir = %q", saved)
+	}
+}
+
+func TestSettingsShortcut(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 80, 24
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if got := updated.(Model); got.screen != screenSettings {
+		t.Fatalf("screen = %v", got.screen)
+	}
+}
+
 func TestFailedDownloadMarksQueueItem(t *testing.T) {
 	m := New([]provider.Provider{stubProvider{}}, t.TempDir(), nil)
 	m.screen = screenDownloads
@@ -338,5 +441,162 @@ func TestFailedDownloadMarksQueueItem(t *testing.T) {
 	}
 	if got.status == "Download complete" {
 		t.Error("failed download reported as complete")
+	}
+}
+
+func TestCreatorLineContents(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	view := m.View()
+	if !strings.Contains(view, creatorText) {
+		t.Fatalf("view is missing %q", creatorText)
+	}
+	if !strings.Contains(view, "\x1b]8;;"+creatorURL+"\x1b\\") {
+		t.Fatalf("view is missing the OSC 8 link to %s", creatorURL)
+	}
+	if !strings.Contains(view, "\x1b]8;;\x1b\\") {
+		t.Fatal("hyperlink is not closed")
+	}
+	lines := strings.Split(view, "\n")
+	if last := lines[len(lines)-1]; !strings.Contains(last, "@chotathanos") {
+		t.Fatalf("credit is not the bottom line: %q", last)
+	}
+	if got := lipgloss.Width(lines[len(lines)-1]); got > 120 {
+		t.Fatalf("credit line width = %d", got)
+	}
+}
+
+func TestCreatorLineFit(t *testing.T) {
+	for _, tc := range []struct {
+		w, h  int
+		shown bool
+	}{{80, 24, false}, {120, 40, true}} {
+		m := New(nil, t.TempDir(), nil)
+		m.width, m.height = tc.w, tc.h
+		m.layout()
+		view := m.View()
+		if got := lipgloss.Height(view); got != tc.h {
+			t.Errorf("%dx%d: height = %d", tc.w, tc.h, got)
+		}
+		if got := strings.Contains(view, creatorText); got != tc.shown {
+			t.Errorf("%dx%d: credit shown = %v", tc.w, tc.h, got)
+		}
+		for i, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got > tc.w {
+				t.Errorf("%dx%d: line %d width %d", tc.w, tc.h, i+1, got)
+			}
+		}
+	}
+}
+
+func TestCreatorHitTarget(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	x := m.leftMargin() + m.creatorPad()
+	if !m.creatorHit(x, m.height-1) {
+		t.Fatal("credit text is not clickable")
+	}
+	if m.creatorHit(x, m.height-2) {
+		t.Fatal("hint row should not open the credit link")
+	}
+
+	m.width, m.height = 80, 24
+	if m.creatorHit(m.leftMargin(), m.height-1) {
+		t.Fatal("hidden credit should not be clickable")
+	}
+}
+
+func TestResultsKeyboardNavigation(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	m.screen = screenResults
+	items := make([]list.Item, 5)
+	for i := range items {
+		items[i] = item{title: string(rune('A' + i))}
+	}
+	m.main.SetItems(items)
+	m.main.Select(0)
+	m.layout()
+
+	for _, tc := range []struct {
+		msg  tea.KeyMsg
+		want int
+	}{
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, 1},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, 2},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}, 1},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, 4},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}, 0},
+		{tea.KeyMsg{Type: tea.KeyEnd}, 4},
+		{tea.KeyMsg{Type: tea.KeyHome}, 0},
+	} {
+		updated, _ := m.handleKey(tc.msg)
+		m = updated.(Model)
+		if got := m.main.Index(); got != tc.want {
+			t.Fatalf("%s: index = %d, want %d", tc.msg.String(), got, tc.want)
+		}
+		if m.screen != screenResults {
+			t.Fatalf("%s: left the results screen", tc.msg.String())
+		}
+	}
+
+	if updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyLeft}); updated.(Model).screen != screenHome {
+		t.Fatal("left did not go back")
+	}
+}
+
+func TestBackspaceGoesBack(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 80, 24
+	m.screen = screenLibrary
+	if updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyBackspace}); updated.(Model).screen != screenHome {
+		t.Fatal("backspace did not go back from library")
+	}
+}
+
+func TestSettingsLeftRightCyclesQuality(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 80, 24
+	m.screen = screenSettings
+	m.settingsRow = settingsQuality
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyLeft})
+	got := updated.(Model)
+	if got.quality != "480p" {
+		t.Fatalf("left from auto = %q", got.quality)
+	}
+	if got.screen != screenSettings {
+		t.Fatal("left left the settings screen")
+	}
+
+	updated, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRight})
+	got = updated.(Model)
+	if got.quality != "auto" || got.screen != screenSettings {
+		t.Fatalf("right = %q on %v", got.quality, got.screen)
+	}
+
+	updated, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	if got = updated.(Model); got.settingsRow != settingsRowCount-1 {
+		t.Fatalf("G selected row %d", got.settingsRow)
+	}
+	updated, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if got = updated.(Model); got.settingsRow != 0 {
+		t.Fatalf("g selected row %d", got.settingsRow)
+	}
+}
+
+func TestBreadcrumbClickGoesHome(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 120, 40
+	m.screen = screenResults
+	m.main.SetItems([]list.Item{item{title: "A"}})
+	m.layout()
+
+	updated, _ := m.handleMouse(tea.MouseMsg{
+		X: m.leftMargin() + 1, Y: m.bodyOffset(),
+		Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+	})
+	if got := updated.(Model); got.screen != screenHome {
+		t.Fatalf("breadcrumb click left screen at %v", got.screen)
 	}
 }

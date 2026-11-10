@@ -37,6 +37,23 @@ const (
 	screenSetup
 	screenBusy
 	screenHelp
+	screenSettings
+)
+
+const (
+	settingsQuality = iota
+	settingsDir
+	settingsDatabase
+	settingsProviders
+	settingsTheme
+	settingsRowCount
+)
+
+var qualityOptions = []string{"auto", "1080p", "720p", "480p"}
+
+const (
+	creatorURL  = "https://x.com/chotathanos"
+	creatorText = "made by @chotathanos"
 )
 
 type focus int
@@ -226,6 +243,11 @@ type Model struct {
 	providerLoading bool
 	scroll          *scrollState
 
+	quality     string
+	settingsRow int
+	dirInput    textinput.Model
+	dirEditing  bool
+
 	player     *media.Player
 	playCancel context.CancelFunc
 
@@ -275,6 +297,11 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
+	dirInput := textinput.New()
+	dirInput.Placeholder = "~/Downloads/weeb-box"
+	dirInput.CharLimit = 500
+	dirInput.Width = 40
+
 	m := Model{
 		providers:      providers,
 		byName:         providerMap(providers),
@@ -292,6 +319,8 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 		downloadsByNum: map[int]store.Download{},
 		providerState:  map[string]store.ProviderState{},
 		scroll:         scroll,
+		quality:        "auto",
+		dirInput:       dirInput,
 		width:          80,
 		height:         24,
 	}
@@ -326,6 +355,7 @@ func (m Model) Init() tea.Cmd {
 		providerStateCmd(m.st),
 		scrollTickCmd(),
 		loadHomeCmd(m.st, m.libraryDir),
+		loadSettingsCmd(m.st),
 	)
 }
 
@@ -379,6 +409,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			index := m.main.Index()
 			m.main.SetItems(m.providerItems())
 			m.main.Select(index)
+		}
+		return m, nil
+
+	case settingsMsg:
+		if msg.quality != "" {
+			m.quality = msg.quality
 		}
 		return m, nil
 
@@ -494,7 +530,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.episode.Title != "" {
 			title += " · " + msg.episode.Title
 		}
-		player, err := media.Play(context.Background(), msg.stream, title, msg.start)
+		player, err := media.Play(context.Background(), msg.stream, title, msg.start, m.quality)
 		if err != nil {
 			m.screen = m.playReturn
 			m.err = err
@@ -594,6 +630,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	if m.screen == screenSettings && m.dirEditing {
+		return m.handleSettingsEdit(msg)
+	}
+
 	if key == "ctrl+h" || (key == "?" && !(m.screen == screenHome && m.focus == focusSearch)) {
 		if m.screen == screenHelp {
 			m.screen = m.helpReturn
@@ -619,13 +659,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.screen != screenBusy && key == "ctrl+p" {
 		return m.openProviders()
 	}
+	if m.screen != screenBusy && key == "ctrl+o" {
+		return m.openSettings()
+	}
 
 	switch m.screen {
 	case screenHome:
 		return m.handleHomeKey(msg)
 	case screenResults:
 		switch key {
-		case "esc":
+		case "esc", "left", "backspace":
 			m.screen, m.err, m.status = screenHome, nil, ""
 			m.layout()
 			return m, tea.Batch(loadHomeCmd(m.st, m.libraryDir))
@@ -650,7 +693,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case screenEpisodes:
 		switch key {
-		case "esc":
+		case "esc", "left", "backspace":
 			m.showResults()
 			return m, nil
 		case "enter":
@@ -686,7 +729,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case screenDownloads:
 		switch key {
-		case "esc":
+		case "esc", "left", "backspace":
 			if m.anime.Title != "" {
 				m.screen = screenEpisodes
 			} else {
@@ -729,7 +772,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case screenLibrary:
 		switch key {
-		case "esc":
+		case "esc", "left", "backspace":
 			m.screen, m.err, m.status = screenHome, nil, ""
 			m.layout()
 			return m, tea.Batch(loadHomeCmd(m.st, m.libraryDir))
@@ -757,7 +800,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case screenProviders:
 		switch key {
-		case "esc":
+		case "esc", "left", "backspace":
 			m.screen, m.err, m.status = screenHome, nil, ""
 			m.layout()
 			return m, tea.Batch(loadHomeCmd(m.st, m.libraryDir))
@@ -793,9 +836,50 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.main, cmd = m.main.Update(msg)
 		return m, cmd
 
+	case screenSettings:
+		switch key {
+		case "esc", "backspace":
+			m.screen, m.err, m.status = screenHome, nil, ""
+			m.layout()
+			return m, tea.Batch(loadHomeCmd(m.st, m.libraryDir))
+		case "up", "k":
+			if m.settingsRow > 0 {
+				m.settingsRow--
+			}
+		case "down", "j":
+			if m.settingsRow < settingsRowCount-1 {
+				m.settingsRow++
+			}
+		case "home", "g", "pgup":
+			m.settingsRow = 0
+		case "end", "G", "pgdown":
+			m.settingsRow = settingsRowCount - 1
+		case " ", "left", "right":
+			if m.settingsRow == settingsQuality {
+				step := 1
+				if key == "left" {
+					step = -1
+				}
+				m.cycleQuality(step)
+			}
+		case "enter":
+			switch m.settingsRow {
+			case settingsQuality:
+				m.cycleQuality(1)
+			case settingsDir:
+				m.dirEditing = true
+				m.dirInput.SetValue(m.outDir)
+				m.dirInput.Width = max(10, m.viewWidth()-30)
+				return m, m.dirInput.Focus()
+			case settingsProviders:
+				return m.openProviders()
+			}
+		}
+		return m, nil
+
 	case screenSetup:
 		switch key {
-		case "esc", "enter":
+		case "esc", "left", "backspace", "enter":
 			m.screen, m.err = screenHome, nil
 			m.layout()
 			return m, nil
@@ -806,7 +890,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case screenHelp:
-		if key == "esc" {
+		if key == "esc" || key == "left" || key == "backspace" {
 			m.screen = m.helpReturn
 		}
 		return m, nil
@@ -848,7 +932,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case focusResume:
 		switch key {
-		case "esc", "/":
+		case "esc", "/", "left", "backspace":
 			m.focus = focusSearch
 			return m, m.search.Focus()
 		case "tab":
@@ -891,7 +975,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case focusRecent:
 		switch key {
-		case "esc", "/":
+		case "esc", "/", "left", "backspace":
 			m.focus = focusSearch
 			return m, m.search.Focus()
 		case "tab":
@@ -920,6 +1004,63 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.recent, cmd = m.recent.Update(msg)
 		return m, cmd
 	}
+	return m, nil
+}
+
+// handleSettingsEdit processes text entry for the download directory row.
+func (m Model) handleSettingsEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.dirEditing = false
+		m.dirInput.Blur()
+		m.status = "Download directory unchanged"
+		return m, nil
+	case "enter":
+		dir := expandPath(strings.TrimSpace(m.dirInput.Value()))
+		m.dirEditing = false
+		m.dirInput.Blur()
+		if dir == "" {
+			m.err = fmt.Errorf("download directory cannot be empty")
+			return m, nil
+		}
+		old := m.outDir
+		m.outDir = dir
+		if m.libraryDir == old {
+			m.libraryDir = dir
+		}
+		if m.st != nil {
+			if err := m.st.SetSetting(context.Background(), "download_dir", dir); err != nil {
+				m.err = err
+				return m, nil
+			}
+		}
+		m.status = "Download directory saved"
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.dirInput, cmd = m.dirInput.Update(msg)
+	return m, cmd
+}
+
+// cycleQuality moves through the quality options and persists the choice.
+func (m *Model) cycleQuality(step int) {
+	n := len(qualityOptions)
+	index := 0
+	for i, q := range qualityOptions {
+		if q == m.quality {
+			index = i
+			break
+		}
+	}
+	m.quality = qualityOptions[((index+step)%n+n)%n]
+	if m.st != nil {
+		_ = m.st.SetSetting(context.Background(), "quality", m.quality)
+	}
+}
+
+func (m Model) openSettings() (tea.Model, tea.Cmd) {
+	m.screen, m.dirEditing, m.err, m.status = screenSettings, false, nil, ""
+	m.layout()
 	return m, nil
 }
 
@@ -1024,11 +1165,26 @@ func (m Model) scrollMouse(x, y, delta int) Model {
 				m.main.CursorDown()
 			}
 		}
+	case screenSettings:
+		if y >= m.bodyOffset() {
+			if delta < 0 && m.settingsRow > 0 {
+				m.settingsRow--
+			}
+			if delta > 0 && m.settingsRow < settingsRowCount-1 {
+				m.settingsRow++
+			}
+		}
 	}
 	return m
 }
 
 func (m Model) clickMouse(x, y int) (tea.Model, tea.Cmd) {
+	if m.creatorHit(x, y) {
+		if err := media.OpenURL(creatorURL); err != nil {
+			m.err = err
+		}
+		return m, nil
+	}
 	left := m.leftMargin()
 	if x < left || x >= left+m.viewWidth() {
 		return m, nil
@@ -1036,6 +1192,9 @@ func (m Model) clickMouse(x, y int) (tea.Model, tea.Cmd) {
 	bx, by := x-left, y-m.bodyOffset()
 	if by < 0 {
 		return m, nil
+	}
+	if m.crumbHome(bx, by) {
+		return m.goHome()
 	}
 	switch m.screen {
 	case screenHome:
@@ -1048,8 +1207,28 @@ func (m Model) clickMouse(x, y int) (tea.Model, tea.Cmd) {
 		return m.clickList(&m.main, by, 4, screenLibrary)
 	case screenProviders:
 		return m.clickList(&m.main, by, 4, screenProviders)
+	case screenSettings:
+		if row := by - 4; row >= 0 && row < settingsRowCount {
+			m.settingsRow = row
+		}
+		return m, nil
 	}
 	return m, nil
+}
+
+// crumbHome reports whether a click inside the body lands on the "Home" crumb.
+// Every sub-screen except busy starts its body with it.
+func (m Model) crumbHome(bx, by int) bool {
+	if by != 0 || m.screen == screenHome || m.screen == screenBusy {
+		return false
+	}
+	return bx >= 0 && bx < lipgloss.Width("Home")
+}
+
+func (m Model) goHome() (tea.Model, tea.Cmd) {
+	m.screen, m.err, m.status = screenHome, nil, ""
+	m.layout()
+	return m, tea.Batch(loadHomeCmd(m.st, m.libraryDir))
 }
 
 func (m Model) clickHome(bx, by int) (tea.Model, tea.Cmd) {
@@ -1261,7 +1440,7 @@ func (m *Model) startDownload(episodes []provider.Episode) (tea.Model, tea.Cmd) 
 	m.layout()
 
 	dir := filepath.Join(m.outDir, safeName(m.providerName()), safeName(m.anime.Title))
-	go runDownloads(ctx, m.prov, m.st, m.anime, dir, episodes, ch)
+	go runDownloads(ctx, m.prov, m.st, m.anime, dir, m.quality, episodes, ch)
 	return m, waitFor(ch)
 }
 
@@ -1302,6 +1481,8 @@ func (m Model) bodyView() string {
 		body = m.busyView()
 	case screenHelp:
 		body = m.helpView()
+	case screenSettings:
+		body = m.settingsView()
 	}
 	if m.err != nil {
 		body += "\n" + errStyle.MaxWidth(max(10, m.viewWidth()-2)).Render("error: "+strings.SplitN(m.err.Error(), "\n", 2)[0])
@@ -1360,6 +1541,8 @@ func (m Model) screenName() string {
 		return "working"
 	case screenHelp:
 		return "help"
+	case screenSettings:
+		return "settings"
 	default:
 		return ""
 	}
@@ -1388,12 +1571,47 @@ func (m Model) footer() string {
 		items = []string{hint("ctrl+c", "quit")}
 	case screenHelp:
 		items = []string{hint("esc", "back"), hint("q", "quit")}
+	case screenSettings:
+		if m.dirEditing {
+			items = []string{hint("enter", "save"), hint("esc", "cancel")}
+		} else {
+			items = []string{hint("↑↓", "row"), hint("space", "cycle"), hint("enter", "edit"), hint("esc", "back")}
+		}
 	}
 	sep := dimStyle.Render("  ·  ")
 	for len(items) > 1 && lipgloss.Width(strings.Join(items, sep)) > m.viewWidth() {
 		items = items[:len(items)-1]
 	}
-	return strings.Join(items, sep)
+	hints := strings.Join(items, sep)
+	if !m.showCreator() {
+		return hints
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, hints, m.creatorView())
+}
+
+// showCreator hides the credit on 80x24 and shows it once a row is spare.
+func (m Model) showCreator() bool { return m.height >= 26 }
+
+// creatorView is a single, horizontally centered OSC 8 hyperlink line.
+func (m Model) creatorView() string {
+	return strings.Repeat(" ", m.creatorPad()) + m.creatorLine()
+}
+
+func (m Model) creatorLine() string {
+	return "\x1b]8;;" + creatorURL + "\x1b\\" + dimStyle.Render(creatorText) + "\x1b]8;;\x1b\\"
+}
+
+func (m Model) creatorPad() int {
+	return max(0, (m.viewWidth()-lipgloss.Width(m.creatorLine()))/2)
+}
+
+// creatorHit reports whether an absolute terminal cell is on the credit line.
+func (m Model) creatorHit(x, y int) bool {
+	if !m.showCreator() || y != m.height-1 {
+		return false
+	}
+	start := m.leftMargin() + m.creatorPad()
+	return x >= start && x < start+lipgloss.Width(m.creatorLine())
 }
 
 func (m Model) homeView() string {
@@ -1634,6 +1852,57 @@ func (m Model) providersView() string {
 	)
 }
 
+func (m Model) settingsView() string {
+	content := m.viewWidth()
+	inner := content - 4
+
+	enabled := 0
+	for _, p := range m.providers {
+		if state, ok := m.providerState[p.Name()]; !ok || state.Enabled {
+			enabled++
+		}
+	}
+	dbPath := "(none)"
+	if m.st != nil {
+		dbPath = m.st.Path()
+	}
+	dirValue := m.outDir
+	dirNote := "enter to edit"
+	if m.dirEditing {
+		dirValue = m.dirInput.View()
+		dirNote = "enter save · esc cancel"
+	}
+	rows := []struct {
+		label, value, note string
+	}{
+		{"Preferred quality", m.quality, "space / ← → cycle"},
+		{"Download directory", dirValue, dirNote},
+		{"Database", dbPath, "-db requires restart"},
+		{"Providers", fmt.Sprintf("%d/%d enabled", enabled, len(m.providers)), "ctrl+p providers"},
+		{"Theme", "Carbon dark · IBM Plex Mono", "switching planned"},
+	}
+	labelWidth := 20
+	lines := make([]string, len(rows))
+	for i, row := range rows {
+		line := dimStyle.Width(labelWidth).Render(row.label) +
+			lipgloss.NewStyle().Foreground(colorText).Render(row.value)
+		if row.note != "" {
+			line += dimStyle.Render("  " + row.note)
+		}
+		if i == m.settingsRow {
+			line = titleStyle.Render("› ") + line
+		} else {
+			line = "  " + line
+		}
+		lines[i] = lipgloss.NewStyle().MaxWidth(max(10, inner-2)).Render(line)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.crumbs("Home", "settings"),
+		"",
+		panel("Settings", strings.Join(lines, "\n"), inner, true),
+	)
+}
+
 func (m Model) libraryView() string {
 	content := m.viewWidth()
 	inner := content - 4
@@ -1755,10 +2024,10 @@ func (m Model) helpView() string {
 	nav := strings.Join([]string{
 		keyline("↑ ↓", "move selection"),
 		keyline("enter", "open / confirm"),
-		keyline("esc", "back"),
-		keyline("q", "quit"),
+		keyline("esc / q", "back / quit"),
 		keyline("ctrl+h", "toggle help"),
 		keyline("ctrl+p", "providers"),
+		keyline("ctrl+o", "settings"),
 		keyline("ctrl+l", "downloaded library"),
 	}, "\n")
 	mediaKeys := strings.Join([]string{
@@ -1986,6 +2255,23 @@ func providerStateCmd(st *store.Store) tea.Cmd {
 	}
 }
 
+type settingsMsg struct {
+	quality string
+	err     error
+}
+
+func loadSettingsCmd(st *store.Store) tea.Cmd {
+	return func() tea.Msg {
+		if st == nil {
+			return settingsMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		quality, err := st.GetSetting(ctx, "quality", "auto")
+		return settingsMsg{quality: quality, err: err}
+	}
+}
+
 type homeMsg struct {
 	recents  []store.Search
 	progress []store.Progress
@@ -2176,7 +2462,7 @@ func waitFor(ch <-chan dlEvent) tea.Cmd {
 	}
 }
 
-func runDownloads(ctx context.Context, p provider.Provider, st *store.Store, anime provider.Anime, dir string, episodes []provider.Episode, ch chan<- dlEvent) {
+func runDownloads(ctx context.Context, p provider.Provider, st *store.Store, anime provider.Anime, dir, quality string, episodes []provider.Episode, ch chan<- dlEvent) {
 	defer close(ch)
 	for i, ep := range episodes {
 		if !sendEvent(ctx, ch, dlEvent{index: i, state: qActive, status: "resolving stream…"}) {
@@ -2205,7 +2491,7 @@ func runDownloads(ctx context.Context, p provider.Provider, st *store.Store, ani
 		if !sendEvent(ctx, ch, dlEvent{index: i, state: qActive, status: "downloading…"}) {
 			return
 		}
-		err = media.Download(ctx, stream, dest, func(p media.Progress) {
+		err = media.Download(ctx, stream, dest, quality, func(p media.Progress) {
 			sendEvent(ctx, ch, dlEvent{
 				index: i, state: qActive, percent: p.Percent,
 				bytes: p.Bytes, rate: p.Rate, speed: p.Speed, eta: p.ETA, status: "downloading…",
@@ -2243,6 +2529,20 @@ func sendEvent(ctx context.Context, ch chan<- dlEvent, event dlEvent) bool {
 }
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._ -]+`)
+
+func expandPath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
 
 func safeName(name string) string {
 	name = strings.TrimSpace(unsafeName.ReplaceAllString(name, "_"))

@@ -44,7 +44,7 @@ the same status and commands. Press `r` to recheck after installing, or
 
 ## Keys
 
-Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list.
+Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+o` opens Settings.
 
 | screen  | keys |
 | ------- | ---- |
@@ -55,6 +55,7 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 | downloads | `x` cancel, `r` retry last failed episode, `o` open folder, `esc` back |
 | library | `↑`/`↓` move, `enter` play the local file, `o` open folder, `r` rescan, `esc` home |
 | providers | `space`/`enter` enable or disable, `r` refresh status, `esc` back |
+| settings | `↑`/`↓` row, `space`/`←`/`→` cycle quality, `enter` edit download dir, `esc` back |
 | setup | `r` recheck dependencies, `enter`/`esc` continue |
 
 Only one download job runs at a time; starting a queue stops at the first failure. `r` retries only the last failed episode, not a cancelled queue.
@@ -108,6 +109,20 @@ The MegaPlay resolver (data-id → encrypted sources → HLS + WebVTT) is shared
 `-base` overrides the gogoanime host only; the other providers use their defaults.
 
 KissAnime.tv.in was evaluated but is not wired yet: its search is an AJAX/CSRF endpoint and its player path needs a dedicated adapter.
+
+## Settings
+
+`ctrl+o` opens preferences:
+
+- **Preferred quality** — `auto`, `1080p`, `720p`, or `480p`. `auto` probes the connection and picks a variant with headroom; explicit modes prefer that height and fall back lower.
+- **Download directory** — editable and persisted. `-dir` overrides it for that run; existing files are not moved.
+- **Database** — shows the active SQLite path. Changing it requires restarting with `-db`.
+- **Providers** — enabled/total count; press `ctrl+p` to choose which sources search uses.
+- **Theme** — Carbon dark + IBM Plex Mono (theme switching is planned).
+
+The selected quality applies to playback and downloads. The database and download paths are shown in the help screen too.
+
+Made by [@chotathanos](https://x.com/chotathanos).
 
 ## Theme
 

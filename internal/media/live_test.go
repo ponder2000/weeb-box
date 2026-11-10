@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/exec"
 	"slices"
@@ -11,6 +12,40 @@ import (
 
 	"github.com/ponder2000/weeb-box/internal/provider/gogo"
 )
+
+func TestLiveQuality(t *testing.T) {
+	if os.Getenv("WEEB_LIVE") == "" {
+		t.Skip("set WEEB_LIVE=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	adapter := gogo.New("")
+	animes, err := adapter.Search(ctx, "psyren")
+	if err != nil || len(animes) == 0 {
+		t.Fatalf("search: %v", err)
+	}
+	episodes, err := adapter.Episodes(ctx, animes[0])
+	if err != nil || len(episodes) == 0 {
+		t.Fatalf("episodes: %v", err)
+	}
+	stream, err := adapter.Stream(ctx, episodes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, quality := range []string{"720p", "auto"} {
+		selected, err := SelectQuality(ctx, http.DefaultClient, stream, quality)
+		if err != nil {
+			t.Fatalf("%s: %v", quality, err)
+		}
+		if selected.URL == stream.URL {
+			t.Fatalf("%s did not select a variant", quality)
+		}
+		if len(selected.Subtitles) != len(stream.Subtitles) || selected.Referer != stream.Referer {
+			t.Fatalf("%s lost metadata: %+v", quality, selected)
+		}
+		t.Logf("%s -> %s", quality, selected.URL)
+	}
+}
 
 func TestLiveDownload(t *testing.T) {
 	if os.Getenv("WEEB_LIVE") == "" {
