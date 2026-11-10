@@ -1443,6 +1443,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// removeListRow drops the selected row and keeps the cursor on the next one.
+func removeListRow(l *list.Model) {
+	index := l.Index()
+	items := l.Items()
+	if index < 0 || index >= len(items) {
+		return
+	}
+	next := make([]list.Item, 0, len(items)-1)
+	next = append(next, items[:index]...)
+	next = append(next, items[index+1:]...)
+	l.SetItems(next)
+	if index >= len(next) {
+		index = len(next) - 1
+	}
+	if index >= 0 {
+		l.Select(index)
+	}
+}
+
 func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	switch m.focus {
@@ -1476,6 +1495,25 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case focusResume:
 		switch key {
+		case "x":
+			selected, ok := m.resume.SelectedItem().(item)
+			if !ok {
+				return m, nil
+			}
+			p := selected.progress
+			if m.playCancel != nil && m.playInfo.AnimeURL == p.AnimeURL {
+				m.status = "Stop playback before removing this anime"
+				return m, nil
+			}
+			if m.st != nil {
+				if err := m.st.DeleteProgress(context.Background(), p.Provider, p.AnimeURL, p.AnimeTitle); err != nil {
+					m.err = err
+					return m, nil
+				}
+			}
+			removeListRow(&m.resume)
+			m.status = "Removed from continue watching"
+			return m, nil
 		case "esc", "/", "left", "backspace":
 			m.focus = focusSearch
 			return m, m.search.Focus()
@@ -1519,6 +1557,20 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case focusRecent:
 		switch key {
+		case "x":
+			selected, ok := m.recent.SelectedItem().(item)
+			if !ok {
+				return m, nil
+			}
+			if m.st != nil {
+				if err := m.st.DeleteSearch(context.Background(), selected.query); err != nil {
+					m.err = err
+					return m, nil
+				}
+			}
+			removeListRow(&m.recent)
+			m.status = fmt.Sprintf("Removed %q from history", selected.query)
+			return m, nil
 		case "esc", "/", "left", "backspace":
 			m.focus = focusSearch
 			return m, m.search.Focus()
@@ -2584,7 +2636,7 @@ func (m Model) footer() string {
 		if m.focus == focusSearch {
 			items = []string{hint("enter", "search"), hint("tab", "history"), hint("ctrl+b", "browse"), hint("ctrl+l", "library"), hint("ctrl+h", "help"), hint("esc", "quit")}
 		} else {
-			items = []string{hint("enter", "open"), hint("tab", "next"), hint("ctrl+b", "browse"), hint("ctrl+l", "library"), hint("ctrl+h", "help"), hint("esc", "search")}
+			items = []string{hint("enter", "open"), hint("x", "remove"), hint("tab", "next"), hint("ctrl+b", "browse"), hint("ctrl+l", "library"), hint("ctrl+h", "help"), hint("esc", "search")}
 		}
 	case screenGenres:
 		items = []string{hint("enter", "browse genre"), hint("esc", "back")}
@@ -3256,6 +3308,7 @@ func (m Model) helpView() string {
 		keyline("enter", "open / confirm"),
 		keyline("esc / q", "back / quit"),
 		keyline("ctrl+h", "toggle help"),
+		keyline("x", "remove Home row"),
 		keyline("ctrl+b", "browse by genre"),
 		keyline("ctrl+p", "providers"),
 		keyline("ctrl+o", "settings"),

@@ -206,6 +206,23 @@ func (s *Store) ClearSearches(ctx context.Context) error {
 	return err
 }
 
+// DeleteSearch removes one saved query.
+func (s *Store) DeleteSearch(ctx context.Context, query string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM search_history WHERE query = ?`, query)
+	return err
+}
+
+// DeleteProgress removes every recorded episode for one anime. Local files are
+// grouped by title because each file has its own anime URL.
+func (s *Store) DeleteProgress(ctx context.Context, provider, animeURL, animeTitle string) error {
+	if provider == "local" {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM watch_progress WHERE provider = 'local' AND anime_title = ?`, animeTitle)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM watch_progress WHERE provider = ? AND anime_url = ?`, provider, animeURL)
+	return err
+}
+
 func (s *Store) SaveProgress(ctx context.Context, p Progress) error {
 	if p.UpdatedAt == 0 {
 		p.UpdatedAt = time.Now().Unix()

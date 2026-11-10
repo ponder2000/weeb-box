@@ -169,3 +169,69 @@ func TestRecentProgressGroupsAnime(t *testing.T) {
 		t.Errorf("other group = %+v", g)
 	}
 }
+
+func TestDeleteProgressAndSearch(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	for ep := 1; ep <= 2; ep++ {
+		if err := st.SaveProgress(ctx, Progress{
+			Provider: "gogoanime", EpisodeURL: "https://x/ep" + string(rune('0'+ep)),
+			AnimeURL: "https://x/anime", AnimeTitle: "Frieren",
+			EpisodeNumber: ep, Position: 10, Duration: 100,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.SaveProgress(ctx, Progress{
+		Provider: "gogoanime", EpisodeURL: "https://x/other",
+		AnimeURL: "https://x/other", AnimeTitle: "Other",
+		EpisodeNumber: 1, Position: 10, Duration: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveProgress(ctx, Progress{
+		Provider: "local", EpisodeURL: "/tmp/e1.mp4", AnimeURL: "/tmp/e1.mp4",
+		AnimeTitle: "Local Show", EpisodeNumber: 1, Position: 10, Duration: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveProgress(ctx, Progress{
+		Provider: "local", EpisodeURL: "/tmp/e2.mp4", AnimeURL: "/tmp/e2.mp4",
+		AnimeTitle: "Local Show", EpisodeNumber: 2, Position: 10, Duration: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.DeleteProgress(ctx, "gogoanime", "https://x/anime", "Frieren"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteProgress(ctx, "local", "/tmp/e2.mp4", "Local Show"); err != nil {
+		t.Fatal(err)
+	}
+	left, err := st.RecentProgress(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].AnimeURL != "https://x/other" {
+		t.Fatalf("remaining progress = %+v", left)
+	}
+
+	if err := st.AddSearch(ctx, "frieren"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSearch(ctx, "psyren"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteSearch(ctx, "frieren"); err != nil {
+		t.Fatal(err)
+	}
+	searches, err := st.RecentSearches(ctx, 10)
+	if err != nil || len(searches) != 1 || searches[0].Query != "psyren" {
+		t.Fatalf("searches = %+v err=%v", searches, err)
+	}
+}

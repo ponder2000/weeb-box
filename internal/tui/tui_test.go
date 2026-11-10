@@ -1858,3 +1858,83 @@ func TestHomeRowsNarrowKeepProgress(t *testing.T) {
 		t.Fatalf("narrow home row lost progress: %q", plain)
 	}
 }
+
+func TestHomeRemoveWithX(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, p := range []store.Progress{
+		{Provider: "gogoanime", EpisodeURL: "https://x/ep1", AnimeURL: "https://x/anime", AnimeTitle: "Frieren", EpisodeNumber: 1, Position: 10, Duration: 100},
+		{Provider: "gogoanime", EpisodeURL: "https://x/other", AnimeURL: "https://x/other", AnimeTitle: "Other", EpisodeNumber: 1, Position: 20, Duration: 100},
+	} {
+		if err := st.SaveProgress(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{"frieren", "psyren"} {
+		if err := st.AddSearch(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := New(nil, t.TempDir(), st)
+	m.width, m.height = 120, 40
+	m = runHome(t, m)
+
+	m.focus = focusResume
+	selected, ok := m.resume.SelectedItem().(item)
+	if !ok {
+		t.Fatal("no resume item")
+	}
+	before := len(m.resume.Items())
+	updated, _ := m.handleHomeKey(runeKey('x'))
+	m = updated.(Model)
+	if got := len(m.resume.Items()); got != before-1 {
+		t.Fatalf("resume rows = %d, want %d", got, before-1)
+	}
+	left, err := st.RecentProgress(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range left {
+		if p.AnimeURL == selected.progress.AnimeURL {
+			t.Fatalf("progress for %q was not deleted", p.AnimeTitle)
+		}
+	}
+
+	m.focus = focusRecent
+	query := m.recent.SelectedItem().(item).query
+	before = len(m.recent.Items())
+	updated, _ = m.handleHomeKey(runeKey('x'))
+	m = updated.(Model)
+	if got := len(m.recent.Items()); got != before-1 {
+		t.Fatalf("recent rows = %d, want %d", got, before-1)
+	}
+	searches, err := st.RecentSearches(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range searches {
+		if q.Query == query {
+			t.Fatalf("search %q was not deleted", query)
+		}
+	}
+
+	// x in the search box is text, not a delete.
+	m.focus = focusSearch
+	m.search.Focus()
+	updated, _ = m.handleHomeKey(runeKey('x'))
+	if got := updated.(Model).search.Value(); got != "x" {
+		t.Fatalf("search value = %q", got)
+	}
+}
+
+func runHome(t *testing.T, m Model) Model {
+	t.Helper()
+	msg := loadHomeCmd(m.st, m.libraryDir)()
+	updated, _ := m.Update(msg)
+	return updated.(Model)
+}

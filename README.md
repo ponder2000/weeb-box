@@ -49,7 +49,7 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 | screen  | keys |
 | ------- | ---- |
 | home — search focused | type a query, `enter` search, `tab`/`↓` move to lists, `esc` quit |
-| home — continue watching / recent searches | `↑`/`↓` move, `tab` next list, `enter` resume or re-run search, `esc` or `/` back to search box, `ctrl+r` clear search history (recent searches only), `q` quit |
+| home — continue watching / recent searches | `↑`/`↓` move, `enter` resume or re-run search, `x` remove the selected anime or query, `tab` next list, `esc` or `/` back to search box, `ctrl+r` clear search history (recent searches only), `q` quit |
 | results | `↑`/`↓` move, `enter` open episodes, `i` view cover, `v` view download queue, `esc` home |
 | episodes | `↑`/`↓` move, `enter` play, `d` download selected, `a` download from selected to the end, `i` view cover, `v` view queue, `esc` back |
 | downloads | `x` cancel, `r` retry last failed episode, `o` open folder, `esc` back |
