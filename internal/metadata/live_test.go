@@ -24,7 +24,7 @@ func TestLiveLookup(t *testing.T) {
 		t.Fatalf("incomplete info = %+v", info)
 	}
 
-	items, err := client.Browse(ctx, "Adventure", 1)
+	items, err := client.Browse(ctx, "Adventure", 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}

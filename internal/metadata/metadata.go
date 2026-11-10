@@ -92,6 +92,12 @@ const browseQuery = `query ($genre: String, $page: Int) { Page(page: $page, perP
 	media(genre: $genre, type: ANIME, isAdult: false, sort: POPULARITY_DESC) {` + mediaFields + `}
 } }`
 
+// AniList treats isAdult: null as a filter, not "no filter", so the adult feed
+// needs a query that omits the argument entirely.
+const browseQueryAll = `query ($genre: String, $page: Int) { Page(page: $page, perPage: 20) {
+	media(genre: $genre, type: ANIME, sort: POPULARITY_DESC) {` + mediaFields + `}
+} }`
+
 type anilistMedia struct {
 	Title struct {
 		Romaji  string `json:"romaji"`
@@ -176,9 +182,10 @@ func (c *Client) Lookup(ctx context.Context, title string) (Info, error) {
 	return info, nil
 }
 
-// Browse lists currently popular anime in one genre. Ratings come from AniList
-// only, so they read "Not rated" until Lookup fills them in.
-func (c *Client) Browse(ctx context.Context, genre string, page int) ([]Info, error) {
+// Browse lists currently popular anime in one genre. includeAdult false keeps
+// the feed non-adult; true drops the filter so AniList returns both. Ratings
+// come from AniList only, so they read "Not rated" until Lookup fills them in.
+func (c *Client) Browse(ctx context.Context, genre string, page int, includeAdult bool) ([]Info, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -186,9 +193,13 @@ func (c *Client) Browse(ctx context.Context, genre string, page int) ([]Info, er
 	if genre = strings.TrimSpace(genre); genre != "" {
 		genreVar = genre
 	}
+	query := browseQuery
+	if includeAdult {
+		query = browseQueryAll
+	}
 	var resp anilistResponse
 	vars := map[string]any{"genre": genreVar, "page": page}
-	if err := c.post(ctx, browseQuery, vars, &resp); err != nil {
+	if err := c.post(ctx, query, vars, &resp); err != nil {
 		return nil, err
 	}
 	items := make([]Info, 0, len(resp.Data.Page.Media))

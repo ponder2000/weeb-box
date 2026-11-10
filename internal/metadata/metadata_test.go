@@ -204,6 +204,33 @@ func TestLookupJikanRatingAndFallback(t *testing.T) {
 	})
 }
 
+func TestBrowseAdultFilter(t *testing.T) {
+	var query string
+	client := newTestClient(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Query string `json:"query"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("body: %v", err)
+			}
+			query = req.Query
+			writeJSON(w, `{"data":{"Page":{"media":[]}}}`)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			t.Error("browse should not call jikan")
+		})
+	if _, err := client.Browse(context.Background(), "Action", 1, true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(query, "isAdult:") {
+		t.Fatalf("adult browse kept the isAdult filter: %s", query)
+	}
+	if !strings.Contains(query, "genre: $genre") {
+		t.Fatalf("query missing genre variable: %s", query)
+	}
+}
+
 func TestBrowse(t *testing.T) {
 	var query string
 	var vars map[string]any
@@ -230,7 +257,7 @@ func TestBrowse(t *testing.T) {
 			writeJSON(w, `{"data":[{"rating":"PG-13 - Teens 13 or older"}]}`)
 		})
 
-	items, err := client.Browse(context.Background(), "Adventure", 2)
+	items, err := client.Browse(context.Background(), "Adventure", 2, false)
 	if err != nil {
 		t.Fatal(err)
 	}
