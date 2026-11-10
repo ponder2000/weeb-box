@@ -1,6 +1,6 @@
 # weeb-box
 
-A Go TUI for watching and downloading anime from [gogoanime.or.at](https://gogoanime.or.at). The home dashboard shows continue-watching, recent searches, and stats. Search a title, pick a series, then stream an episode with mpv/ffplay or download one episode, the rest of the season, or everything from the selected episode on.
+A Go TUI for watching and downloading anime from multiple sources. The home dashboard shows continue-watching, recent searches, and stats. Search a title across every provider, pick a series and source, then stream an episode with mpv/ffplay or download one episode, the rest of the season, or everything from the selected episode on.
 
 ## Prerequisites
 
@@ -90,7 +90,23 @@ The Library (`ctrl+l`) scans the download root—or a separate `-library` root�
 
 ## Providers
 
-`internal/provider` defines `Provider` (`Name`, `Search`, `Episodes`, `Stream`). To add a source, implement it in `internal/provider/<name>` and pass the adapter to `tui.New` in `main.go`. `Stream` returns a media URL plus an optional `Referer`, which `internal/media` forwards to ffmpeg, ffprobe, mpv, or ffplay.
+Search runs against all registered providers in parallel. Results show their source; selecting a result pins that provider for episodes, playback, and downloads.
+
+| provider | site | search |
+| --- | --- | --- |
+| `gogoanime` | gogoanime.or.at | HTML |
+| `animekai` | animekai.com.co | WordPress REST |
+| `anizone` | anizone.io | WordPress REST (`az_series`) |
+| `kissanime` | kissanime.com.cv | WordPress REST |
+| `hianime` | hianime.ms | HTML |
+
+The MegaPlay resolver (data-id → encrypted sources → HLS + WebVTT) is shared by all providers in `internal/provider/megaplay`.
+
+`internal/provider` defines `Provider` (`Name`, `Search`, `Episodes`, `Stream`). To add a source, implement it in `internal/provider/<name>` and add it to the registry in `main.go`. `Stream` returns a media URL, optional `Referer`, and optional subtitle tracks, which `internal/media` forwards to ffmpeg, ffprobe, mpv, or ffplay.
+
+`-base` overrides the gogoanime host only; the other providers use their defaults.
+
+KissAnime.tv.in was evaluated but is not wired yet: its search is an AJAX/CSRF endpoint and its player path needs a dedicated adapter.
 
 ## Theme
 

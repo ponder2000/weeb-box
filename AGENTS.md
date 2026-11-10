@@ -3,19 +3,24 @@
 ## Commands
 - Build: `go build ./...` (or `go build -o bin/weeb-box .`).
 - Vet: `go vet ./...`.
-- Unit tests: `go test ./...`. They cover the gogo parsers/stream chain/AES, store round-trips, media argument building, a generated HLS download through real ffmpeg, and TUI state/layout-fit tests at 80x24 and 120x40. The HLS test skips if ffmpeg is absent.
-- Live tests (hit gogoanime, ~seconds): `WEEB_LIVE=1 go test ./internal/provider/gogo -run Live -v` and `WEEB_LIVE=1 go test ./internal/media -run Live -v`. Do not run casually.
+- Unit tests: `go test ./...`. They cover all provider adapters, the shared MegaPlay resolver/AES, deps, library, store round-trips, media arguments, a generated HLS download through real ffmpeg, and TUI state/multi-provider search/layout-fit tests. The HLS test skips if ffmpeg is absent.
+- Live tests (hit the real sites, ~seconds): `WEEB_LIVE=1 go test ./internal/provider/... -run Live -v` and `WEEB_LIVE=1 go test ./internal/media -run Live -v`. Do not run casually.
 - Run: `go run .` — alt-screen TUI, needs a real terminal; not a headless smoke test.
 - Dependency check: `go run . -check` — prints ffmpeg/mpv/uosc/theme paths plus install commands; exits 1 if ffmpeg or mpv is missing.
 
 ## Architecture
-- `main.go`: flags `-dir`, `-db`, `-base`, `-library`; default dir `~/Downloads/weeb-box`; library defaults to the download dir; `store.Open` then `gogo.New(baseURL)` and `tui.New(prov, dir, st).SetLibrary(...)`; `tea.WithAltScreen()` + `tea.WithMouseCellMotion()`; errors go to stderr via `fail`.
+- `main.go`: flags `-dir`, `-db`, `-base`, `-library`; default dir `~/Downloads/weeb-box`; library defaults to the download dir; builds the provider registry (`gogoanime`, `animekai`, `anizone`, `kissanime`, `hianime`), then `store.Open` and `tui.New(providers, dir, st).SetLibrary(...)`; `tea.WithAltScreen()` + `tea.WithMouseCellMotion()`; errors go to stderr via `fail`. `-base` overrides gogoanime only.
 - `internal/provider/provider.go`: the boundary. `Anime{Title,URL,Meta}`, `Episode{Number,Title,URL}`, `Subtitle{URL,Label,Default}`, `Stream{URL,Referer,Subtitles}`, `Provider{Name,Search,Episodes,Stream}`.
-- `internal/provider/gogo`: sole adapter (`Name()` is `gogoanime`). 30s HTTP client, 20 MiB body cap, browser UA.
+- `internal/provider/megaplay`: shared MegaPlay resolver: player page → `[data-id]` → `getSourcesNew` with Referer/XHR → AES-256-CBC → HLS + WebVTT tracks. Used by gogo, animekai, anizone, kissanime, hianime. The key/IV rotate; update them here.
+- `internal/provider/gogo`: gogoanime adapter (WordPress animestream + MegaPlay). 30s HTTP client, 20 MiB body cap, browser UA.
   - Search: `.postbody .listupd article.bs a[itemprop="url"]`; title from `title` attr, else text; meta from `.typez`/`.sb`/`.epx`; dedupe by href.
   - Episodes: `.eplister ul li a`; number from `.epl-num`, else the `-episode-(\d+)` href regex; dedupe and sort ascending.
-  - Stream: episode page → `iframe[src*="newplayer"]` → `iframe[src*="megaplay"]` (any iframe fallback) → `[data-id]` (`#megaplay-player` first) → `<origin>/stream/getSourcesNew?id=...` with `Referer` + `X-Requested-With` → base64url `enc` → AES-256-CBC → JSON `file` (HLS `.m3u8`) and `tracks` (WebVTT captions). Returns `Referer: <player origin>/`. MegaPlay returns a soft "Error 410" page without the Referer.
-- `internal/tui/tui.go`: screens `home → results → episodes → downloads → library`, plus `setup`, `busy`, and `help`, with a home focus cycle `search → resume → recent`. `Init` also runs `deps.Check`; missing tools auto-open Setup once per session, and `r` rechecks. Provider work runs in `tea.Cmd`s: home load 5s, search/episodes 60s, stream 90s. Downloads run in a goroutine (`runDownloads`) feeding a buffered `dlEvent` channel read by `waitFor`. Playback uses `tea.ExecProcess`; `ctrl+c` cancels the download/play contexts and quits.
+  - Stream: episode page → `iframe[src*="newplayer"]` → `iframe[src*="megaplay"]` (any iframe fallback) → `megaplay.Resolve`. MegaPlay returns a soft "Error 410" page without the Referer.
+- `internal/provider/animekai`: `animekai.com.co`; WP REST search, `#ak-episodes`/anchor episodes, newplayer → `megaplay.Resolve`.
+- `internal/provider/anizone`: `anizone.io`; WP REST `az_series` search, `.az-ep-grid` episodes, direct MegaPlay iframe. Recommended-series links outside the grid must be ignored.
+- `internal/provider/kissanime`: `kissanime.com.cv`; WP REST search, episode anchors, `streaming.php` → MegaPlay.
+- `internal/provider/hianime`: `hianime.ms`; HTML search/details, `data-hk-watch` token → `/stream/<token>/<lang>` 302 → `megaplay.Resolve`. Details pages omit unavailable episodes.
+- `internal/tui/tui.go`: screens `home → results → episodes → downloads → library`, plus `setup`, `busy`, and `help`, with a home focus cycle `search → resume → recent`. `Init` also runs `deps.Check`; missing tools auto-open Setup once per session, and `r` rechecks. Search fans out to every registered provider concurrently and keeps registry order; each result row carries its adapter, and selecting it sets the current provider. `m.byName` resolves provider names from saved progress. Provider work runs in `tea.Cmd`s: home load 5s, search/episodes 60s, stream 90s. Downloads run in a goroutine (`runDownloads`) feeding a buffered `dlEvent` channel read by `waitFor`. Playback uses `tea.ExecProcess`; `ctrl+c` cancels the download/play contexts and quits.
 - The TUI is a max-110-column, horizontally centered column; the header/footer stay at the window edges and the body is centered vertically. Mouse hit-testing depends on `bodyOffset()`/`leftMargin()` mirroring `View()`. If layout changes, update those and `listIndex()` (2-line default delegate) together, or clicks land on the wrong row.
 - Mouse: wheel scrolls the list under the pointer; click selects, a second click within 600ms activates; episode detail action rows are single-click. `main.go` enables `tea.WithMouseCellMotion()`.
 - `internal/media/media.go`: the only place `ffmpeg`/`ffprobe`/`mpv`/`ffplay` are invoked, and the only place the folder is opened.

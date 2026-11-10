@@ -1,11 +1,7 @@
 package gogo
 
 import (
-	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,20 +41,6 @@ func TestParseEpisodesSortedAndDeduped(t *testing.T) {
 	}
 	if len(episodes) != 2 || episodes[0].Number != 1 || episodes[1].Number != 2 {
 		t.Fatalf("got %+v", episodes)
-	}
-}
-
-func TestDecryptSources(t *testing.T) {
-	enc := "wdeBruh3qqn_i5wUNnyaPcXqidp1UWP84FfPHzGyKXAnifiddIPaR0t7-4y_3oD_d4IhuoQz-H_gSEcS" +
-		"meaWJq5Iwi_8J2Wpdg8CnQVCIrj7g8KEk7eibAcgOpboVqt9BMi8KuRY8AUaaSDX5KONWxS1fG00cVB-" +
-		"q7lbtnAN1eA"
-	got, err := decryptSources(enc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `{"file":"https://fetch.nexabloom.top/anime/c55a26472f8223cd7717aa736f09dffc/6db6dd99f070ec52b283886b65c9adf8/master.m3u8"}`
-	if got != want {
-		t.Fatalf("got %s", got)
 	}
 }
 
@@ -123,7 +105,7 @@ func TestStreamChain(t *testing.T) {
 				fail(w, "sources need XHR header")
 				return
 			}
-			w.Write([]byte(`{"enc":"` + encryptForTest(`{"file":"https://cdn.example/x/master.m3u8"}`) + `"}`))
+			w.Write([]byte(`{"enc":"wdeBruh3qqn_i5wUNnyaPWiRLLdfX1H1YKBxoBvLhJuin6WMxjzk9aZMRezhoHTo"}`))
 		default:
 			fail(w, "unexpected path "+r.URL.Path)
 		}
@@ -160,18 +142,6 @@ func TestStreamMissingIframe(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "episode player") {
 		t.Fatalf("got %v", err)
 	}
-}
-
-func encryptForTest(plain string) string {
-	n := aes.BlockSize - len(plain)%aes.BlockSize
-	data := append([]byte(plain), bytes.Repeat([]byte{byte(n)}, n)...)
-	block, err := aes.NewCipher(padKey([]byte(sourcesKey), 32))
-	if err != nil {
-		panic(err)
-	}
-	out := make([]byte, len(data))
-	cipher.NewCBCEncrypter(block, padKey([]byte(sourcesIV), 16)).CryptBlocks(out, data)
-	return base64.RawURLEncoding.EncodeToString(out)
 }
 
 func TestLive(t *testing.T) {

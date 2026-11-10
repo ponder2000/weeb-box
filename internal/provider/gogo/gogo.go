@@ -4,10 +4,6 @@ package gogo
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,16 +16,12 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/ponder2000/weeb-box/internal/provider"
+	"github.com/ponder2000/weeb-box/internal/provider/megaplay"
 )
 
 const (
 	DefaultBaseURL = "https://gogoanime.or.at"
 	userAgent      = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
-
-	// Keys are embedded in the MegaPlay player JS. If streams start failing, re-read
-	// https://megaplay.buzz/lib/app.main.js and update these two constants.
-	sourcesKey = "i?LMTAx0Q6,:}50U"
-	sourcesIV  = "W0;27ToaUpl_P%'c"
 )
 
 var episodeNum = regexp.MustCompile(`-episode-(\d+)`)
@@ -91,74 +83,7 @@ func (a *Adapter) Stream(ctx context.Context, episode provider.Episode) (provide
 		}
 	}
 	streamURL = a.resolve(playerURL, streamURL)
-
-	// megaplay answers 200 with a soft "Error 410" page when the Referer is absent.
-	streamHeaders := http.Header{}
-	streamHeaders.Set("Referer", playerURL)
-	streamPage, err := a.get(ctx, streamURL, streamHeaders)
-	if err != nil {
-		return provider.Stream{}, err
-	}
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(streamPage))
-	if err != nil {
-		return provider.Stream{}, err
-	}
-	id, ok := doc.Find("#megaplay-player").Attr("data-id")
-	if !ok {
-		id, ok = doc.Find("[data-id]").First().Attr("data-id")
-	}
-	if !ok || id == "" {
-		return provider.Stream{}, fmt.Errorf("megaplay: no data-id in %s", streamURL)
-	}
-
-	origin := originOf(streamURL)
-	apiURL := origin + "/stream/getSourcesNew?id=" + url.QueryEscape(id)
-	headers := http.Header{}
-	headers.Set("Referer", streamURL)
-	headers.Set("X-Requested-With", "XMLHttpRequest")
-	sources, err := a.get(ctx, apiURL, headers)
-	if err != nil {
-		return provider.Stream{}, err
-	}
-
-	var payload struct {
-		Enc    string `json:"enc"`
-		Tracks []struct {
-			File    string `json:"file"`
-			Label   string `json:"label"`
-			Kind    string `json:"kind"`
-			Default bool   `json:"default"`
-		} `json:"tracks"`
-	}
-	if err := json.Unmarshal(sources, &payload); err != nil {
-		return provider.Stream{}, fmt.Errorf("sources json: %w", err)
-	}
-	plain, err := decryptSources(payload.Enc)
-	if err != nil {
-		return provider.Stream{}, err
-	}
-	var media struct {
-		File string `json:"file"`
-	}
-	if err := json.Unmarshal([]byte(plain), &media); err != nil {
-		return provider.Stream{}, fmt.Errorf("decrypted sources: %w", err)
-	}
-	if media.File == "" {
-		return provider.Stream{}, fmt.Errorf("megaplay: empty stream url")
-	}
-	var subtitles []provider.Subtitle
-	for _, track := range payload.Tracks {
-		if !strings.HasSuffix(strings.ToLower(track.File), ".vtt") {
-			continue
-		}
-		if track.Kind != "" && track.Kind != "captions" {
-			continue
-		}
-		subtitles = append(subtitles, provider.Subtitle{
-			URL: track.File, Label: track.Label, Default: track.Default,
-		})
-	}
-	return provider.Stream{URL: media.File, Referer: origin + "/", Subtitles: subtitles}, nil
+	return megaplay.Resolve(ctx, a.Client, streamURL, playerURL)
 }
 
 func (a *Adapter) get(ctx context.Context, rawURL string, headers http.Header) ([]byte, error) {
@@ -280,49 +205,4 @@ func firstAttr(r io.Reader, selector, attr string) (string, error) {
 		return "", fmt.Errorf("no %s on %s", attr, selector)
 	}
 	return strings.TrimSpace(value), nil
-}
-
-func originOf(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return u.Scheme + "://" + u.Host
-}
-
-func decryptSources(enc string) (string, error) {
-	enc = strings.TrimRight(strings.TrimSpace(enc), "=")
-	if enc == "" {
-		return "", fmt.Errorf("megaplay: empty encrypted sources")
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(enc)
-	if err != nil {
-		return "", fmt.Errorf("megaplay: decode sources: %w", err)
-	}
-	if len(raw) == 0 || len(raw)%aes.BlockSize != 0 {
-		return "", fmt.Errorf("megaplay: bad ciphertext length %d", len(raw))
-	}
-	block, err := aes.NewCipher(padKey([]byte(sourcesKey), 32))
-	if err != nil {
-		return "", err
-	}
-	out := make([]byte, len(raw))
-	cipher.NewCBCDecrypter(block, padKey([]byte(sourcesIV), 16)).CryptBlocks(out, raw)
-
-	n := int(out[len(out)-1])
-	if n < 1 || n > aes.BlockSize || n > len(out) {
-		return "", fmt.Errorf("megaplay: bad padding")
-	}
-	for _, b := range out[len(out)-n:] {
-		if int(b) != n {
-			return "", fmt.Errorf("megaplay: bad padding")
-		}
-	}
-	return string(out[:len(out)-n]), nil
-}
-
-func padKey(key []byte, size int) []byte {
-	padded := make([]byte, size)
-	copy(padded, key)
-	return padded
 }

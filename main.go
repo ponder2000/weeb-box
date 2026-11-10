@@ -8,7 +8,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ponder2000/weeb-box/internal/deps"
+	"github.com/ponder2000/weeb-box/internal/provider"
+	"github.com/ponder2000/weeb-box/internal/provider/animekai"
+	"github.com/ponder2000/weeb-box/internal/provider/anizone"
 	"github.com/ponder2000/weeb-box/internal/provider/gogo"
+	"github.com/ponder2000/weeb-box/internal/provider/hianime"
+	"github.com/ponder2000/weeb-box/internal/provider/kissanime"
 	"github.com/ponder2000/weeb-box/internal/store"
 	"github.com/ponder2000/weeb-box/internal/tui"
 )
@@ -45,7 +50,14 @@ func main() {
 	}
 	defer st.Close()
 
-	model := tui.New(gogo.New(*baseURL), dir, st).SetLibrary(*libraryDir)
+	providers := []provider.Provider{
+		gogo.New(*baseURL),
+		animekai.New(""),
+		anizone.New(""),
+		kissanime.New(""),
+		hianime.New(""),
+	}
+	model := tui.New(providers, dir, st).SetLibrary(*libraryDir)
 	program := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),

@@ -60,6 +60,7 @@ type item struct {
 	progress store.Progress
 	file     lib.File
 	query    string
+	prov     provider.Provider
 }
 
 func (i item) Title() string       { return i.title }
@@ -90,6 +91,8 @@ type queueItem struct {
 
 type Model struct {
 	prov       provider.Provider
+	providers  []provider.Provider
+	byName     map[string]provider.Provider
 	st         *store.Store
 	outDir     string
 	libraryDir string
@@ -111,7 +114,7 @@ type Model struct {
 
 	stats store.Stats
 
-	animes   []provider.Anime
+	results  []searchResult
 	anime    provider.Anime
 	episodes []provider.Episode
 
@@ -141,7 +144,7 @@ type Model struct {
 	err    error
 }
 
-func New(p provider.Provider, outDir string, st *store.Store) Model {
+func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 	search := textinput.New()
 	search.Placeholder = "search anime…"
 	search.Prompt = "> "
@@ -174,7 +177,8 @@ func New(p provider.Provider, outDir string, st *store.Store) Model {
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
 	m := Model{
-		prov:           p,
+		providers:      providers,
+		byName:         providerMap(providers),
 		st:             st,
 		outDir:         outDir,
 		libraryDir:     outDir,
@@ -190,8 +194,19 @@ func New(p provider.Provider, outDir string, st *store.Store) Model {
 		width:          80,
 		height:         24,
 	}
+	if len(providers) > 0 {
+		m.prov = providers[0]
+	}
 	m.layout()
 	return m
+}
+
+func providerMap(providers []provider.Provider) map[string]provider.Provider {
+	out := make(map[string]provider.Provider, len(providers))
+	for _, p := range providers {
+		out[p.Name()] = p
+	}
+	return out
 }
 
 // SetLibrary points the local library at a root other than the download dir.
@@ -205,7 +220,7 @@ func (m Model) SetLibrary(dir string) Model {
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
-		tea.SetWindowTitle("weeb-box — "+m.providerName()),
+		tea.SetWindowTitle("weeb-box — "+m.providerLabel()),
 		checkDepsCmd(),
 		loadHomeCmd(m.st, m.libraryDir),
 	)
@@ -271,14 +286,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen, m.err, m.status = screenHome, msg.err, ""
 			return m, nil
 		}
-		if len(msg.animes) == 0 {
+		if len(msg.results) == 0 {
 			m.screen, m.status = screenHome, fmt.Sprintf("No results for %q", msg.query)
 			return m, nil
 		}
-		m.animes = msg.animes
+		m.results = msg.results
 		m.main.SetItems(m.animeItems())
 		m.main.Select(0)
 		m.screen, m.err, m.status = screenResults, nil, ""
+		if msg.failed > 0 {
+			m.status = fmt.Sprintf("%d source(s) unavailable", msg.failed)
+		}
 		m.layout()
 		return m, nil
 
@@ -489,6 +507,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
+			if selected.prov == nil {
+				m.err = fmt.Errorf("result has no provider")
+				return m, nil
+			}
+			m.prov = selected.prov
 			m.anime = selected.anime
 			m.screen, m.busy, m.err = screenBusy, busyEpisodes, nil
 			m.status = "Loading episodes…"
@@ -568,7 +591,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "o":
 			dir := m.outDir
 			if m.anime.Title != "" {
-				dir = filepath.Join(m.outDir, safeName(m.prov.Name()), safeName(m.anime.Title))
+				dir = filepath.Join(m.outDir, safeName(m.providerName()), safeName(m.anime.Title))
 			}
 			if err := media.OpenFolder(dir); err != nil {
 				m.err = err
@@ -641,7 +664,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.screen, m.busy, m.err = screenBusy, busySearch, nil
 			m.status = fmt.Sprintf("Searching %q…", query)
-			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.prov, query))
+			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.providers, query))
 		case "tab", "down":
 			switch {
 			case len(m.resume.Items()) > 0:
@@ -684,6 +707,12 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					Episode: p.EpisodeNumber,
 				})
 			}
+			prov := m.byName[p.Provider]
+			if prov == nil {
+				m.err = fmt.Errorf("provider %q is not configured", p.Provider)
+				return m, nil
+			}
+			m.prov = prov
 			m.playReturn = screenHome
 			m.screen, m.busy, m.err = screenBusy, busyStream, nil
 			m.status = fmt.Sprintf("Resuming %s E%03d…", p.AnimeTitle, p.EpisodeNumber)
@@ -710,7 +739,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.screen, m.busy, m.err = screenBusy, busySearch, nil
 			m.status = fmt.Sprintf("Searching %q…", selected.query)
-			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.prov, selected.query))
+			return m, tea.Batch(m.spinner.Tick, searchCmd(m.st, m.providers, selected.query))
 		case "ctrl+r":
 			if m.st != nil {
 				if err := m.st.ClearSearches(context.Background()); err != nil {
@@ -732,13 +761,17 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // animeItems rebuilds the results list from the last search, so leaving the
 // episode view returns to results instead of showing episodes there.
 func (m Model) animeItems() []list.Item {
-	items := make([]list.Item, len(m.animes))
-	for i, anime := range m.animes {
-		desc := anime.Meta
-		if desc == "" {
-			desc = "open to browse episodes"
+	items := make([]list.Item, len(m.results))
+	for i, result := range m.results {
+		name := "source"
+		if result.provider != nil {
+			name = result.provider.Name()
 		}
-		items[i] = item{title: anime.Title, desc: desc, anime: anime}
+		desc := name
+		if result.anime.Meta != "" {
+			desc += " · " + result.anime.Meta
+		}
+		items[i] = item{title: result.anime.Title, desc: desc, anime: result.anime, prov: result.provider}
 	}
 	return items
 }
@@ -1041,6 +1074,10 @@ func libraryCmd(root string, st *store.Store) tea.Cmd {
 }
 
 func (m *Model) startDownload(episodes []provider.Episode) (tea.Model, tea.Cmd) {
+	if m.prov == nil {
+		m.err = fmt.Errorf("no provider selected")
+		return m, nil
+	}
 	m.queue = make([]*queueItem, len(episodes))
 	for i, ep := range episodes {
 		m.queue[i] = &queueItem{episode: ep, state: qQueued}
@@ -1056,7 +1093,7 @@ func (m *Model) startDownload(episodes []provider.Episode) (tea.Model, tea.Cmd) 
 	m.screen = screenDownloads
 	m.layout()
 
-	dir := filepath.Join(m.outDir, safeName(m.prov.Name()), safeName(m.anime.Title))
+	dir := filepath.Join(m.outDir, safeName(m.providerName()), safeName(m.anime.Title))
 	go runDownloads(ctx, m.prov, m.st, m.anime, dir, episodes, ch)
 	return m, waitFor(ch)
 }
@@ -1110,7 +1147,7 @@ func (m Model) header() string {
 	if m.screen != screenHome {
 		left += "  " + dimStyle.Render(m.screenName())
 	}
-	right := lipgloss.JoinHorizontal(lipgloss.Center, pill(m.providerName()), " ", pill("v1"))
+	right := lipgloss.JoinHorizontal(lipgloss.Center, pill(m.providerLabel()), " ", pill("v1"))
 	gap := max(1, m.viewWidth()-lipgloss.Width(left)-lipgloss.Width(right))
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, strings.Repeat(" ", gap), right)
 }
@@ -1120,6 +1157,16 @@ func (m Model) providerName() string {
 		return "no provider"
 	}
 	return m.prov.Name()
+}
+
+func (m Model) providerLabel() string {
+	if m.screen == screenEpisodes || m.screen == screenDownloads {
+		return m.providerName()
+	}
+	if len(m.providers) > 1 {
+		return fmt.Sprintf("%d providers", len(m.providers))
+	}
+	return m.providerName()
 }
 
 func (m Model) screenName() string {
@@ -1678,10 +1725,16 @@ type homeMsg struct {
 	err      error
 }
 
+type searchResult struct {
+	provider provider.Provider
+	anime    provider.Anime
+}
+
 type searchMsg struct {
-	animes []provider.Anime
-	query  string
-	err    error
+	results []searchResult
+	query   string
+	failed  int
+	err     error
 }
 
 type episodesMsg struct {
@@ -1744,15 +1797,55 @@ func loadHomeCmd(st *store.Store, libraryRoot string) tea.Cmd {
 	}
 }
 
-func searchCmd(st *store.Store, p provider.Provider, query string) tea.Cmd {
+func searchCmd(st *store.Store, providers []provider.Provider, query string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		if st != nil {
 			_ = st.AddSearch(ctx, query)
 		}
-		animes, err := p.Search(ctx, query)
-		return searchMsg{animes: animes, query: query, err: err}
+		if len(providers) == 0 {
+			return searchMsg{query: query, err: fmt.Errorf("no providers configured")}
+		}
+
+		type response struct {
+			index  int
+			animes []provider.Anime
+			err    error
+		}
+		ch := make(chan response, len(providers))
+		for i, p := range providers {
+			go func(i int, p provider.Provider) {
+				animes, err := p.Search(ctx, query)
+				ch <- response{index: i, animes: animes, err: err}
+			}(i, p)
+		}
+
+		ordered := make([][]provider.Anime, len(providers))
+		failed := 0
+		var firstErr error
+		for range providers {
+			result := <-ch
+			if result.err != nil {
+				failed++
+				if firstErr == nil {
+					firstErr = result.err
+				}
+				continue
+			}
+			ordered[result.index] = result.animes
+		}
+
+		var results []searchResult
+		for i, p := range providers {
+			for _, anime := range ordered[i] {
+				results = append(results, searchResult{provider: p, anime: anime})
+			}
+		}
+		if len(results) == 0 && firstErr != nil {
+			return searchMsg{query: query, failed: failed, err: firstErr}
+		}
+		return searchMsg{query: query, results: results, failed: failed}
 	}
 }
 

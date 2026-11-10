@@ -37,7 +37,7 @@ func TestSafeName(t *testing.T) {
 
 func TestShowResultsRestoresAnimeList(t *testing.T) {
 	m := New(nil, t.TempDir(), nil)
-	m.animes = []provider.Anime{{Title: "A"}, {Title: "B"}}
+	m.results = []searchResult{{provider: stubProvider{}, anime: provider.Anime{Title: "A"}}, {provider: stubProvider{}, anime: provider.Anime{Title: "B"}}}
 	m.screen = screenEpisodes
 	m.main.SetItems([]list.Item{item{title: "E001"}, item{title: "E002"}})
 	m.main.Select(1) // stale cursor from the episode list
@@ -51,8 +51,8 @@ func TestShowResultsRestoresAnimeList(t *testing.T) {
 		t.Errorf("selection index = %d, want 0", got)
 	}
 	items := m.main.Items()
-	if len(items) != len(m.animes) {
-		t.Fatalf("got %d items, want %d", len(items), len(m.animes))
+	if len(items) != len(m.results) {
+		t.Fatalf("got %d items, want %d", len(items), len(m.results))
 	}
 	if it, ok := items[0].(item); !ok || it.title != "A" || it.anime.Title != "A" {
 		t.Errorf("first item = %#v", items[0])
@@ -95,10 +95,42 @@ func (stubProvider) Stream(context.Context, provider.Episode) (provider.Stream, 
 
 type stubProvider struct{}
 
+type fixedProvider struct {
+	name   string
+	animes []provider.Anime
+	err    error
+}
+
+func (f fixedProvider) Name() string { return f.name }
+func (f fixedProvider) Search(context.Context, string) ([]provider.Anime, error) {
+	return f.animes, f.err
+}
+func (f fixedProvider) Episodes(context.Context, provider.Anime) ([]provider.Episode, error) {
+	return nil, nil
+}
+func (f fixedProvider) Stream(context.Context, provider.Episode) (provider.Stream, error) {
+	return provider.Stream{}, nil
+}
+
+func TestSearchAggregatesProviders(t *testing.T) {
+	providers := []provider.Provider{
+		fixedProvider{name: "alpha", animes: []provider.Anime{{Title: "A"}}},
+		fixedProvider{name: "beta", animes: []provider.Anime{{Title: "B"}}},
+		fixedProvider{name: "broken", err: errors.New("boom")},
+	}
+	msg := searchCmd(nil, providers, "x")().(searchMsg)
+	if len(msg.results) != 2 || msg.failed != 1 {
+		t.Fatalf("results=%d failed=%d err=%v", len(msg.results), msg.failed, msg.err)
+	}
+	if msg.results[0].provider.Name() != "alpha" || msg.results[1].provider.Name() != "beta" {
+		t.Fatalf("provider order = %s, %s", msg.results[0].provider.Name(), msg.results[1].provider.Name())
+	}
+}
+
 func TestStatusClearedWhenWorkFinishes(t *testing.T) {
-	m := New(stubProvider{}, t.TempDir(), nil)
+	m := New([]provider.Provider{stubProvider{}}, t.TempDir(), nil)
 	m.screen, m.busy, m.status = screenBusy, busySearch, "Searching…"
-	updated, _ := m.Update(searchMsg{animes: []provider.Anime{{Title: "A"}}, query: "a"})
+	updated, _ := m.Update(searchMsg{results: []searchResult{{provider: stubProvider{}, anime: provider.Anime{Title: "A"}}}, query: "a"})
 	if got := updated.(Model); got.screen != screenResults || got.status != "" {
 		t.Errorf("search finished: screen=%v status=%q", got.screen, got.status)
 	}
@@ -112,12 +144,12 @@ func TestStatusClearedWhenWorkFinishes(t *testing.T) {
 
 func TestViewFitsTerminal(t *testing.T) {
 	for _, size := range []struct{ w, h int }{{80, 24}, {120, 40}} {
-		m := New(stubProvider{}, t.TempDir(), nil)
+		m := New([]provider.Provider{stubProvider{}}, t.TempDir(), nil)
 		m.width, m.height = size.w, size.h
 		m.recent.SetItems([]list.Item{item{title: "psyren", desc: "2m ago"}})
-		m.animes = []provider.Anime{{Title: strings.Repeat("long ", 20), Meta: "TV"}}
+		m.results = []searchResult{{provider: stubProvider{}, anime: provider.Anime{Title: strings.Repeat("long ", 20), Meta: "TV"}}}
 		m.episodes = []provider.Episode{{Number: 1, Title: strings.Repeat("long ", 20)}}
-		m.anime = m.animes[0]
+		m.anime = m.results[0].anime
 
 		views := map[string]func(){
 			"home":    func() { m.screen = screenHome },
@@ -253,7 +285,7 @@ func TestMouseSelectsResumeAndWheelMovesList(t *testing.T) {
 }
 
 func TestFailedDownloadMarksQueueItem(t *testing.T) {
-	m := New(stubProvider{}, t.TempDir(), nil)
+	m := New([]provider.Provider{stubProvider{}}, t.TempDir(), nil)
 	m.screen = screenDownloads
 	m.queue = []*queueItem{{episode: provider.Episode{Number: 1}, state: qActive}}
 	m.downloading = true
