@@ -44,7 +44,7 @@ the same status and commands. Press `r` to recheck after installing, or
 
 ## Keys
 
-Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+b` browses genres; `ctrl+o` opens Settings.
+Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `shift+tab` cycles Home → Browse → Library → Downloads → Providers → Settings → Home. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+b` browses genres; `ctrl+o` opens Settings.
 
 | screen  | keys |
 | ------- | ---- |
@@ -61,7 +61,7 @@ Global: `ctrl+c` cancels a running download or playback and quits. `q` quits fro
 
 Only one download job runs at a time; starting a queue stops at the first failure. `r` retries only the last failed episode, not a cancelled queue.
 
-Playback suspends the TUI until the player exits. mpv gets the OSC, resume, live progress, and the default subtitle track (English when available); `v` hides/shows subtitles, `j` cycles tracks, and the uosc CC button toggles them. ffplay gets basic keyboard controls but no live progress or subtitles. mpv streams HLS on demand with a short forward buffer (around 15–30 seconds), so it does not fetch the whole episode ahead of time.
+Playback opens mpv in its own window while the TUI keeps running in the terminal. mpv runs without terminal input (`--terminal=no`), so its keys control the window, and closing it returns to the TUI. mpv gets the OSC, resume, live progress, and the default subtitle track (English when available); `v` hides/shows subtitles, `j` cycles tracks, and the uosc CC button toggles them. ffplay gets basic keyboard controls but no live progress or subtitles. `q`/`ctrl+c` in the TUI closes the player. mpv streams HLS on demand with a short forward buffer (around 15–30 seconds), so it does not fetch the whole episode ahead of time.
 
 For a modern control bar, install [uosc](https://github.com/tomasklaen/uosc) and copy `themes/mpv/uosc.conf` to `~/.config/mpv/script-opts/uosc.conf`. The app auto-detects uosc and disables the built-in OSC; the theme replaces `master.m3u8` with the anime/episode title. Re-copy that config after updating to pick up the CC toggle.
 
@@ -121,19 +121,22 @@ The TUI enriches a selected title with public metadata:
 
 At **100+ columns**, the Results/Browse screens show a right-hand preview with a
 cover rendered as colored half-blocks; low-color terminals fall back to ASCII.
-Narrower terminals keep the compact rating/genres line, and the episode detail
-pane shows rating, genres, and tags.
+The preview sizes itself from the terminal (roughly 32–38 columns, 2:3 aspect,
+capped by the panel height) so the art stays readable. Narrower terminals keep
+the compact rating/genres line, and the episode detail pane shows rating,
+genres, and tags.
 
 Press `i` on Results, Browse, or Episodes to open the selected title's cover.
 iTerm2 and Kitty draw it inline through their own image protocol; other
-terminals get a 60x30 half-block viewer with title, rating, genres, and tags
-(`esc`/`enter` back).
+terminals get a large half-block viewer (about 60% of the terminal, 2:3) with
+title, rating, genres, and tags (`esc`/`enter` back).
 
 `ctrl+b` opens **Browse by genre**. Pick a genre, then a title, and the normal
 multi-provider search runs for that title. `n`/`]` and `p`/`[` page through the
-popular list; an empty page reports "no more titles". AniList browse is
-non-adult; search results are not filtered by rating unless **Hide adult** is
-enabled in Settings.
+popular list; an empty page reports "no more titles". Browse follows **Hide
+adult** in Settings: off (default) includes adult titles and the Hentai genre,
+on requests AniList's non-adult feed. The flag is AniList's explicit-adult mark,
+so uncensored/ecchi titles that are not rated `18+` can still appear.
 
 ## Settings
 
@@ -143,7 +146,7 @@ enabled in Settings.
 - **Download directory** — editable and persisted. `-dir` overrides it for that run; existing files are not moved.
 - **Database** — shows the active SQLite path. Changing it requires restarting with `-db`.
 - **Providers** — enabled/total count; press `ctrl+p` to choose which sources search uses.
-- **Hide adult** — yes/no. Off by default, so `18+` badges show normally. When on, an adult result's preview reads "18+ hidden" and `enter`/`i` refuse to open it. Provider results are never filtered ahead of time.
+- **Hide adult** — yes/no. Off by default, so `18+` badges show normally and Browse includes adult titles plus the Hentai genre. When on, an adult provider result's preview reads "18+ hidden" and `enter`/`i` refuse to open it, and Browse uses AniList's non-adult feed. Provider results are not removed ahead of time, and "Uncensored"/ecchi tags are not treated as adult.
 - **Color theme** — Carbon Dark, Carbon Light, Tokyo Night, or Mono. This changes TUI colors; the font remains a terminal setting (IBM Plex Mono recommended).
 
 The selected quality applies to playback and downloads. The database and download paths are shown in the help screen too.
