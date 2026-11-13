@@ -47,6 +47,38 @@ func TestLiveQuality(t *testing.T) {
 	}
 }
 
+func TestLiveVariants(t *testing.T) {
+	if os.Getenv("WEEB_LIVE") == "" {
+		t.Skip("set WEEB_LIVE=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	adapter := gogo.New("")
+	animes, err := adapter.Search(ctx, "psyren")
+	if err != nil || len(animes) == 0 {
+		t.Skipf("search unavailable: %v", err)
+	}
+	episodes, err := adapter.Episodes(ctx, animes[0])
+	if err != nil || len(episodes) == 0 {
+		t.Skipf("episodes unavailable: %v", err)
+	}
+	stream, err := adapter.Stream(ctx, episodes[0])
+	if err != nil {
+		t.Skipf("stream unavailable: %v", err)
+	}
+	variants, err := Variants(ctx, http.DefaultClient, stream)
+	if err != nil {
+		t.Skipf("variants unavailable: %v", err)
+	}
+	if len(variants) == 0 {
+		t.Fatal("no variants")
+	}
+	if !slices.Contains(variants, "1080p") && !slices.Contains(variants, "720p") {
+		t.Fatalf("variants = %v", variants)
+	}
+	t.Logf("variants: %v", variants)
+}
+
 func TestLiveDownload(t *testing.T) {
 	if os.Getenv("WEEB_LIVE") == "" {
 		t.Skip("set WEEB_LIVE=1")

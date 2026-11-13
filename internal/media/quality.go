@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,35 @@ func SelectQuality(ctx context.Context, client *http.Client, src provider.Stream
 	}
 	src.URL = chosen.url
 	return src, nil
+}
+
+// Variants lists the heights a master playlist offers, highest first, e.g.
+// ["1080p", "720p", "480p"]. Non-HLS streams and media playlists return nil.
+func Variants(ctx context.Context, client *http.Client, src provider.Stream) ([]string, error) {
+	if !isHLS(src.URL) {
+		return nil, nil
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	variants, err := fetchVariants(ctx, client, src)
+	if err != nil {
+		return nil, err
+	}
+	var heights []int
+	for _, v := range variants {
+		if v.height > 0 {
+			heights = append(heights, v.height)
+		}
+	}
+	slices.Sort(heights)
+	heights = slices.Compact(heights)
+	slices.Reverse(heights)
+	var names []string
+	for _, h := range heights {
+		names = append(names, fmt.Sprintf("%dp", h))
+	}
+	return names, nil
 }
 
 func isHLS(raw string) bool {

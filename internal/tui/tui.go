@@ -24,6 +24,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/ponder2000/weeb-box/internal/cover"
 	"github.com/ponder2000/weeb-box/internal/deps"
+	"github.com/ponder2000/weeb-box/internal/filler"
 	lib "github.com/ponder2000/weeb-box/internal/library"
 	"github.com/ponder2000/weeb-box/internal/media"
 	"github.com/ponder2000/weeb-box/internal/metadata"
@@ -48,6 +49,7 @@ const (
 	screenHelp
 	screenSettings
 	screenCover
+	screenStats
 )
 
 const (
@@ -75,6 +77,7 @@ const (
 type metaProvider interface {
 	Lookup(ctx context.Context, title string) (metadata.Info, error)
 	Browse(ctx context.Context, genre string, page int, includeAdult bool) ([]metadata.Info, error)
+	BrowseSeason(ctx context.Context, season string, year, page int, includeAdult bool) ([]metadata.Info, error)
 }
 
 // coverRenderer turns a cover URL into terminal art; tests stub it.
@@ -118,6 +121,9 @@ type item struct {
 	query     string
 	prov      provider.Provider
 	info      metadata.Info
+	// season marks a synthetic Browse row ("This season") rather than a genre.
+	season string
+	year   int
 }
 
 func (i item) Title() string       { return i.title }
@@ -523,6 +529,8 @@ type Model struct {
 	browseGenre  string
 	browsePage   int
 	browseLoad   bool
+	browseSeason string
+	browseYear   int
 
 	coverReturn   screen
 	coverInfo     metadata.Info
@@ -533,6 +541,14 @@ type Model struct {
 
 	progressByURL  map[string]store.Progress
 	downloadsByNum map[int]store.Download
+	fillerKinds    map[int]filler.Kind
+	fillerLoading  bool
+	fillerTitle    string
+	fillerRetry    string
+	variantsByURL  map[string][]string
+	variantLoading map[string]bool
+	statsRows      []store.WatchStat
+	statsLoading   bool
 
 	libraryFiles   []lib.File
 	libraryLoading bool
@@ -560,6 +576,7 @@ type Model struct {
 	cancelDownload context.CancelFunc
 	dlCh           <-chan dlEvent
 	lastFailed     *provider.Episode
+	cancelled      []provider.Episode
 
 	lastClickAt  time.Time
 	lastClickKey string
@@ -633,6 +650,9 @@ func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 		metaFailed:     map[string]bool{},
 		coverArt:       map[string]coverArtEntry{},
 		coverLoading:   map[string]bool{},
+		fillerKinds:    map[int]filler.Kind{},
+		variantsByURL:  map[string][]string{},
+		variantLoading: map[string]bool{},
 	}
 	if len(providers) > 0 {
 		m.prov = providers[0]
@@ -709,6 +729,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.screen == screenSetup && m.deps.Ready() {
 			m.screen, m.status = screenHome, "Setup complete"
+		}
+		return m, nil
+
+	case fillerMsg:
+		return m, m.applyFiller(msg)
+
+	case variantsMsg:
+		delete(m.variantLoading, msg.url)
+		if msg.err == nil {
+			m.variantsByURL[msg.url] = msg.list
+		} else {
+			// Cache the failure so moving over the episode again stays quiet.
+			m.variantsByURL[msg.url] = nil
+		}
+		return m, nil
+
+	case watchStatsMsg:
+		m.statsLoading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.statsRows = msg.rows
+		m.stats = msg.stats
+		return m, m.ensureStatsGenres()
+
+	case providerTestMsg:
+		m.providerLoading = false
+		ok, bad := 0, []string{}
+		for _, p := range m.providers {
+			err, tested := msg.errs[p.Name()]
+			if !tested {
+				continue
+			}
+			state := m.providerState[p.Name()]
+			state.Name = p.Name()
+			if err != nil {
+				state.LastError = err.Error()
+				bad = append(bad, p.Name())
+			} else {
+				state.LastOK = time.Now().Unix()
+				state.LastError = ""
+				ok++
+			}
+			m.providerState[p.Name()] = state
+		}
+		switch {
+		case len(bad) == 0:
+			m.status = fmt.Sprintf("%d providers responding", ok)
+		case ok == 0:
+			m.status = "All providers failing: " + strings.Join(bad, ", ")
+		default:
+			m.status = fmt.Sprintf("%d ok · failing: %s", ok, strings.Join(bad, ", "))
+		}
+		if m.screen == screenProviders {
+			index := m.main.Index()
+			m.main.SetItems(m.providerItems())
+			m.main.Select(index)
 		}
 		return m, nil
 
@@ -809,11 +887,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.metaCache[msg.key] = msg.info
+		var cmds []tea.Cmd
 		// Only the results and browse screens draw a cover.
 		if m.screen == screenResults || m.screen == screenBrowse {
-			return m, m.ensureCover(msg.info)
+			cmds = append(cmds, m.ensureCover(msg.info))
 		}
-		return m, nil
+		// The filler site indexes English titles; providers decorate theirs, so
+		// one more lookup with AniList's name usually lands the match.
+		if m.screen == screenEpisodes && len(m.fillerKinds) == 0 && msg.info.Title != "" &&
+			msg.key == metadata.Key(m.anime.Title) && msg.info.Title != m.fillerTitle {
+			if m.fillerLoading {
+				m.fillerRetry = msg.info.Title
+			} else {
+				m.fillerTitle = msg.info.Title
+				m.fillerLoading = true
+				cmds = append(cmds, fillerCmd(m.st, msg.info.Title))
+			}
+		}
+		return m, tea.Batch(cmds...)
 
 	case coverMsg:
 		delete(m.coverLoading, msg.key)
@@ -853,7 +944,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		path := msg.path
-		cmd := exec.Command("bash", "-c", `cat "$0"; read -r -n 1 -s`, path)
+		// Deleting the kitty image after the keypress keeps it off the TUI.
+		cmd := exec.Command("bash", "-c", `cat "$0"; read -r -n 1 -s; printf '%s' "$1"`, path, cover.ClearNative())
 		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 			return nativeCoverDoneMsg{path: path, err: err}
 		})
@@ -908,35 +1000,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.episodes = msg.episodes
 		m.progressByURL = msg.progress
 		m.downloadsByNum = msg.downloads
-		items := make([]list.Item, len(msg.episodes))
-		for i, ep := range msg.episodes {
-			var tokens []token
-			if ep.Title != "" {
-				tokens = append(tokens, token{text: ep.Title, kind: tokText})
-			}
-			if _, ok := msg.downloads[ep.Number]; ok {
-				tokens = append(tokens, token{text: "downloaded", kind: tokOK})
-			}
-			if p, ok := msg.progress[ep.URL]; ok && p.Position > 0 {
-				tokens = append(tokens, token{text: progressPct(p) + " watched", kind: tokAccent})
-			}
-			parts := make([]string, len(tokens))
-			for j, t := range tokens {
-				parts[j] = t.text
-			}
-			items[i] = item{
-				title:     fmt.Sprintf("E%03d", ep.Number),
-				titleKind: tokAccent,
-				desc:      strings.Join(parts, " · "),
-				tokens:    tokens,
-				episode:   ep,
-			}
-		}
-		m.main.SetItems(items)
+		m.main.SetItems(m.episodeItems())
 		m.main.Select(0)
+		m.fillerKinds = map[int]filler.Kind{}
+		m.fillerTitle = m.anime.Title
+		m.fillerLoading = true
 		m.screen, m.err, m.status = screenEpisodes, nil, ""
 		m.layout()
-		return m, m.ensureMeta(m.anime.Title)
+		return m, tea.Batch(m.ensureMeta(m.anime.Title), fillerCmd(m.st, m.anime.Title), m.ensureVariants())
 
 	case libraryMsg:
 		m.libraryLoading = false
@@ -971,8 +1042,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamMsg:
 		if msg.err != nil {
+			// One rescue pass through the other enabled adapters, then give up.
+			if !msg.fallback {
+				if candidates := m.fallbackProviders(); len(candidates) > 0 {
+					m.status = m.providerName() + " failed · trying other sources…"
+					m.err = nil
+					return m, fallbackCmd(m.st, candidates, m.providerName(), msg.anime, msg.episode.Number)
+				}
+			}
 			m.screen, m.err, m.status = m.playReturn, msg.err, ""
 			return m, nil
+		}
+		if msg.provider != nil {
+			m.adoptProvider(msg.provider, msg.anime, msg.episodes, msg.episode.Number)
+			m.status = "Playing from " + msg.provider.Name()
 		}
 		title := fmt.Sprintf("%s — E%03d", msg.anime.Title, msg.episode.Number)
 		if msg.episode.Title != "" {
@@ -1080,6 +1163,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelDownload = nil
 			}
 			m.dlCh = nil
+			// Bell only on the edge, so a 12-episode queue does not chirp.
+			fmt.Fprint(os.Stdout, "\a")
 			if m.err == nil {
 				m.status = "Download complete"
 			}
@@ -1088,7 +1173,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitFor(m.dlCh)
 
 	case spinner.TickMsg:
-		if m.screen != screenBusy && !(m.screen == screenLibrary && m.libraryLoading) && !(m.screen == screenProviders && m.providerLoading) && !m.browseLoad && !m.coverViewLoad && len(m.metaLoading) == 0 {
+		if m.screen != screenBusy && !(m.screen == screenLibrary && m.libraryLoading) && !(m.screen == screenProviders && m.providerLoading) && !(m.screen == screenStats && m.statsLoading) && !m.browseLoad && !m.coverViewLoad && len(m.metaLoading) == 0 {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -1162,6 +1247,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.screen != screenBusy && key == "ctrl+o" {
 		return m.openSettings()
 	}
+	if m.screen != screenBusy && m.screen != screenStats && key == "s" && !(m.screen == screenHome && m.focus == focusSearch) {
+		return m.openStats()
+	}
 	if key == "i" && (m.screen == screenResults || m.screen == screenBrowse || m.screen == screenEpisodes) {
 		return m.openCover()
 	}
@@ -1178,7 +1266,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			return m.startBrowse(selected.title)
+			return m.startBrowse(selected)
 		}
 		var cmd tea.Cmd
 		m.main, cmd = m.main.Update(msg)
@@ -1265,10 +1353,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				episodes = m.episodes[index:]
 			}
 			return m.startDownload(episodes)
+		case "w":
+			return m.toggleWatched()
 		}
 		var cmd tea.Cmd
 		m.main, cmd = m.main.Update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, m.ensureVariants())
 
 	case screenDownloads:
 		switch key {
@@ -1285,20 +1375,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.cancelDownload != nil {
 					m.cancelDownload()
 				}
+				m.cancelled = m.cancelled[:0]
 				for _, q := range m.queue {
 					if q.state == qActive || q.state == qQueued {
 						q.state = qFailed
 						q.err = fmt.Errorf("cancelled")
+						m.cancelled = append(m.cancelled, q.episode)
 					}
 				}
 				m.downloading = false
 				m.dlCh = nil
-				m.status = "Download cancelled"
+				m.status = "Download cancelled · r retries the queue"
 			}
 			return m, nil
 		case "r":
 			if !m.downloading && m.lastFailed != nil {
 				return m.startDownload([]provider.Episode{*m.lastFailed})
+			}
+			if !m.downloading && len(m.cancelled) > 0 {
+				return m.startDownload(m.cancelled)
 			}
 			return m, nil
 		case "o":
@@ -1374,10 +1469,28 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.providerLoading = true
 			return m, providerStateCmd(m.st)
+		case "t":
+			if len(m.providers) == 0 {
+				return m, nil
+			}
+			m.providerLoading = true
+			m.err = nil
+			m.status = "Testing providers…"
+			return m, tea.Batch(m.spinner.Tick, providerTestCmd(m.st, m.providers))
 		}
 		var cmd tea.Cmd
 		m.main, cmd = m.main.Update(msg)
 		return m, cmd
+
+	case screenStats:
+		switch key {
+		case "esc", "left", "backspace", "s":
+			return m.goHome()
+		case "r":
+			m.statsLoading = true
+			return m, tea.Batch(m.spinner.Tick, loadWatchStatsCmd(m.st))
+		}
+		return m, nil
 
 	case screenSettings:
 		switch key {
@@ -1768,7 +1881,7 @@ func (m Model) openSettings() (tea.Model, tea.Cmd) {
 // mainScreens is the shift+tab rotation order. The live player joins the cycle
 // after Home while it is open.
 func (m Model) mainScreens() []screen {
-	screens := []screen{screenHome, screenGenres, screenLibrary, screenDownloads, screenProviders, screenSettings}
+	screens := []screen{screenHome, screenGenres, screenLibrary, screenDownloads, screenProviders, screenStats, screenSettings}
 	if m.player != nil {
 		screens = append(screens[:1], append([]screen{screenPlaying}, screens[1:]...)...)
 	}
@@ -1804,13 +1917,19 @@ func (m Model) cycleScreen() (tea.Model, tea.Cmd) {
 		return m, nil
 	case screenProviders:
 		return m.openProviders()
+	case screenStats:
+		return m.openStats()
 	default:
 		return m.openSettings()
 	}
 }
 
-// openGenres shows the AniList genre list that drives Browse.
+// openGenres shows the season shortcuts and the AniList genre list that drive
+// Browse.
 func (m Model) openGenres() (tea.Model, tea.Cmd) {
+	season, year := metadata.SeasonFor(time.Now())
+	prev, prevYear := metadata.PrevSeason(season, year)
+	next, nextYear := metadata.NextSeason(season, year)
 	genres := metadata.Genres
 	desc := "popular · non-adult"
 	if !m.hideAdult {
@@ -1818,9 +1937,13 @@ func (m Model) openGenres() (tea.Model, tea.Cmd) {
 		genres = append(append([]string{}, genres...), "Hentai")
 		desc = "popular · all ratings"
 	}
-	items := make([]list.Item, len(genres))
-	for i, genre := range genres {
-		items[i] = item{title: genre, desc: desc}
+	items := []list.Item{
+		item{title: "This season", desc: fmt.Sprintf("%s %d", season, year), season: season, year: year},
+		item{title: "Last season", desc: fmt.Sprintf("%s %d", prev, prevYear), season: prev, year: prevYear},
+		item{title: "Next season", desc: fmt.Sprintf("%s %d", next, nextYear), season: next, year: nextYear},
+	}
+	for _, genre := range genres {
+		items = append(items, item{title: genre, desc: desc})
 	}
 	m.screen, m.err, m.status = screenGenres, nil, ""
 	m.browseLoad = false
@@ -1830,16 +1953,21 @@ func (m Model) openGenres() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) startBrowse(genre string) (tea.Model, tea.Cmd) {
+func (m Model) startBrowse(selected item) (tea.Model, tea.Cmd) {
 	if m.meta == nil {
 		m.err = fmt.Errorf("metadata client unavailable")
 		return m, nil
 	}
-	m.browseGenre, m.browsePage, m.browseLoad = genre, 1, true
+	label := selected.title
+	if selected.season != "" {
+		label = fmt.Sprintf("%s · %s %d", selected.title, selected.season, selected.year)
+	}
+	m.browseGenre, m.browsePage, m.browseLoad = label, 1, true
+	m.browseSeason, m.browseYear = selected.season, selected.year
 	m.screen, m.err, m.status = screenBrowse, nil, ""
 	m.main.SetItems(nil)
 	m.layout()
-	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, genre, 1, !m.hideAdult))
+	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, label, selected.season, selected.year, 1, !m.hideAdult))
 }
 
 // browsePageBy moves the genre browse one page forward or back.
@@ -1853,7 +1981,7 @@ func (m Model) browsePageBy(step int) (tea.Model, tea.Cmd) {
 	}
 	m.browsePage, m.browseLoad = page, true
 	m.err, m.status = nil, fmt.Sprintf("Loading page %d…", page)
-	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, m.browseGenre, page, !m.hideAdult))
+	return m, tea.Batch(m.spinner.Tick, browseCmd(m.meta, m.browseGenre, m.browseSeason, m.browseYear, page, !m.hideAdult))
 }
 
 // toggleHideAdult flips the adult filter and persists it.
@@ -2659,6 +2787,7 @@ func (m *Model) startDownload(episodes []provider.Episode) (tea.Model, tea.Cmd) 
 	m.dlCh = ch
 	m.downloading = true
 	m.lastFailed = nil
+	m.cancelled = nil
 	m.err = nil
 	m.status = fmt.Sprintf("Downloading %d episode(s)…", len(episodes))
 	m.screen = screenDownloads
@@ -2716,6 +2845,8 @@ func (m Model) bodyView() string {
 		body = m.settingsView()
 	case screenCover:
 		body = m.coverView()
+	case screenStats:
+		body = m.statsView()
 	}
 	if m.err != nil {
 		body += "\n" + errStyle.MaxWidth(max(10, m.viewWidth()-2)).Render("error: "+strings.SplitN(m.err.Error(), "\n", 2)[0])
@@ -2806,7 +2937,7 @@ func (m Model) footer() string {
 	case screenResults:
 		items = []string{hint("↑↓", "move"), hint("enter", "episodes"), hint("i", "cover"), hint("ctrl+b", "browse"), hint("esc", "back")}
 	case screenEpisodes:
-		items = []string{hint("enter", "play"), hint("d", "download"), hint("a", "rest"), hint("i", "cover"), hint("v", "queue"), hint("esc", "back")}
+		items = []string{hint("enter", "play"), hint("d", "download"), hint("a", "rest"), hint("w", "watched"), hint("i", "cover"), hint("v", "queue"), hint("esc", "back")}
 	case screenPlaying:
 		items = []string{hint("[ ]", "prev / next"), hint("esc", "back")}
 	case screenDownloads:
@@ -2814,7 +2945,9 @@ func (m Model) footer() string {
 	case screenLibrary:
 		items = []string{hint("enter", "play"), hint("o", "folder"), hint("r", "rescan"), hint("esc", "back")}
 	case screenProviders:
-		items = []string{hint("space", "toggle"), hint("r", "refresh"), hint("esc", "back")}
+		items = []string{hint("space", "toggle"), hint("t", "test all"), hint("r", "refresh"), hint("esc", "back")}
+	case screenStats:
+		items = []string{hint("r", "refresh"), hint("esc", "back")}
 	case screenSetup:
 		items = []string{hint("r", "recheck"), hint("enter", "continue")}
 	case screenBusy:
@@ -3121,6 +3254,86 @@ func (m Model) coverView() string {
 	)
 }
 
+// episodeItems renders the episode list with downloaded, in-progress, and
+// finished badges.
+func (m Model) episodeItems() []list.Item {
+	items := make([]list.Item, len(m.episodes))
+	for i, ep := range m.episodes {
+		var tokens []token
+		if ep.Title != "" {
+			tokens = append(tokens, token{text: ep.Title, kind: tokText})
+		}
+		if _, ok := m.downloadsByNum[ep.Number]; ok {
+			tokens = append(tokens, token{text: "downloaded", kind: tokOK})
+		}
+		switch m.fillerKinds[ep.Number] {
+		case filler.Filler:
+			tokens = append(tokens, token{text: "filler", kind: tokWarn})
+		case filler.Mixed:
+			tokens = append(tokens, token{text: "mixed", kind: tokMuted})
+		}
+		if p, ok := m.progressByURL[ep.URL]; ok {
+			switch {
+			case p.Position > 0:
+				tokens = append(tokens, token{text: progressPct(p) + " watched", kind: tokAccent})
+			case p.Duration > 0:
+				tokens = append(tokens, token{text: "done", kind: tokOK})
+			}
+		}
+		parts := make([]string, len(tokens))
+		for j, t := range tokens {
+			parts[j] = t.text
+		}
+		items[i] = item{
+			title:     fmt.Sprintf("E%03d", ep.Number),
+			titleKind: tokAccent,
+			desc:      strings.Join(parts, " · "),
+			tokens:    tokens,
+			episode:   ep,
+		}
+	}
+	return items
+}
+
+// toggleWatched flips the selected episode between watched and unwatched.
+func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
+	selected, ok := m.main.SelectedItem().(item)
+	if !ok || m.st == nil {
+		return m, nil
+	}
+	ep := selected.episode
+	ctx := context.Background()
+	index := m.main.Index()
+	if p, known := m.progressByURL[ep.URL]; known && (p.Position > 0 || p.Duration > 0) {
+		if err := m.st.DeleteProgressForEpisode(ctx, m.providerName(), ep.URL); err != nil {
+			m.err = err
+			return m, nil
+		}
+		delete(m.progressByURL, ep.URL)
+		m.status = fmt.Sprintf("E%03d marked unwatched", ep.Number)
+	} else {
+		// A one-second duration means finished: the home screen reads
+		// position 0 with a duration as done, without a player having run.
+		rec := store.Progress{
+			Provider:      m.providerName(),
+			EpisodeURL:    ep.URL,
+			AnimeURL:      m.anime.URL,
+			AnimeTitle:    m.anime.Title,
+			EpisodeNumber: ep.Number,
+			Duration:      1,
+		}
+		if err := m.st.SaveProgress(ctx, rec); err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.progressByURL[ep.URL] = rec
+		m.status = fmt.Sprintf("E%03d marked watched", ep.Number)
+	}
+	m.main.SetItems(m.episodeItems())
+	m.main.Select(index)
+	return m, nil
+}
+
 func (m Model) episodesView() string {
 	content := m.viewWidth()
 	leftOuter := content * 56 / 100
@@ -3166,6 +3379,9 @@ func (m Model) detailView(ep provider.Episode, width int) string {
 		if len(info.Tags) > 0 {
 			lines = append(lines, faintStyle.MaxWidth(width-2).Render(strings.Join(info.Tags[:min(4, len(info.Tags))], " · ")))
 		}
+		if info.Duration > 0 {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("%dm per episode", info.Duration)))
+		}
 	}
 	lines = append(lines, "")
 
@@ -3174,6 +3390,17 @@ func (m Model) detailView(ep provider.Episode, width int) string {
 		lines = append(lines, bar(progressRatio(p), max(10, width-4)))
 		lines = append(lines, dimStyle.Render(fmt.Sprintf("%s · resume at %s", progressPct(p), clock(p.Position))))
 		lines = append(lines, "")
+	}
+	if kind, ok := m.fillerKinds[ep.Number]; ok && kind != filler.Canon {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorWarn).Render(strings.ToUpper(string(kind))+" EPISODE"))
+		lines = append(lines, "")
+	}
+	if list, ok := m.variantsByURL[ep.URL]; ok {
+		if len(list) > 0 {
+			lines = append(lines, dimStyle.Render("quality "+strings.Join(list, " · ")))
+		}
+	} else if m.variantLoading[ep.URL] {
+		lines = append(lines, faintStyle.Render("checking quality…"))
 	}
 	if _, ok := m.downloadsByNum[ep.Number]; ok {
 		lines = append(lines, okStyle.Render("✓ downloaded"))
@@ -3258,6 +3485,40 @@ func (m Model) activeProviders() []provider.Provider {
 		out = append(out, p)
 	}
 	return out
+}
+
+// fallbackProviders is every enabled adapter except the one that just failed.
+func (m Model) fallbackProviders() []provider.Provider {
+	var out []provider.Provider
+	for _, p := range m.activeProviders() {
+		if m.prov != nil && p.Name() == m.prov.Name() {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// adoptProvider pins the adapter the stream actually came from, so next/prev
+// episodes, progress keys, and downloads all follow it.
+func (m *Model) adoptProvider(p provider.Provider, anime provider.Anime, episodes []provider.Episode, number int) {
+	m.prov = p
+	m.anime = anime
+	if len(episodes) == 0 {
+		return
+	}
+	m.episodes = episodes
+	// Progress is keyed by episode URL, and these URLs belong to the new adapter.
+	// shortcut: old watched badges disappear until the list is reloaded.
+	m.progressByURL = map[string]store.Progress{}
+	m.downloadsByNum = map[int]store.Download{}
+	m.main.SetItems(m.episodeItems())
+	for i, ep := range episodes {
+		if ep.Number == number {
+			m.main.Select(i)
+			break
+		}
+	}
 }
 
 func (m Model) openProviders() (tea.Model, tea.Cmd) {
@@ -3477,11 +3738,11 @@ func (m Model) helpView() string {
 		keyline("ctrl+h", "toggle help"),
 		keyline("p", "now-playing stats"),
 		keyline("[ ]", "previous / next episode"),
-		keyline("x", "remove Home row"),
 		keyline("ctrl+b", "browse by genre"),
 		keyline("ctrl+p", "providers"),
 		keyline("ctrl+o", "settings"),
 		keyline("ctrl+l", "downloaded library"),
+		keyline("s", "watch stats"),
 		keyline("shift+tab", "next main screen"),
 		keyline("i", "view cover"),
 	}, "\n")
@@ -3489,8 +3750,10 @@ func (m Model) helpView() string {
 		keyline("enter", "play online"),
 		keyline("d", "download episode"),
 		keyline("a", "download from here"),
+		keyline("w", "mark watched / unwatched"),
 		keyline("x", "cancel download"),
-		keyline("r", "retry failed"),
+		keyline("r", "retry failed / cancelled"),
+		keyline("t", "test all providers"),
 		keyline("o", "open download folder"),
 		keyline("subs", "auto-loaded (mpv)"),
 	}, "\n")
@@ -3712,6 +3975,42 @@ func checkDepsCmd() tea.Cmd {
 	return func() tea.Msg { return depsMsg(deps.Check()) }
 }
 
+type providerTestMsg struct {
+	errs map[string]error
+}
+
+// providerTestCmd searches a fixed title through every adapter so the Providers
+// screen can show which sites still answer.
+func providerTestCmd(st *store.Store, providers []provider.Provider) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		errs := make(map[string]error, len(providers))
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, p := range providers {
+			wg.Add(1)
+			go func(p provider.Provider) {
+				defer wg.Done()
+				_, err := p.Search(ctx, "naruto")
+				mu.Lock()
+				errs[p.Name()] = err
+				mu.Unlock()
+				if st == nil {
+					return
+				}
+				if err != nil {
+					_ = st.MarkProviderError(ctx, p.Name(), err.Error())
+				} else {
+					_ = st.MarkProviderOK(ctx, p.Name())
+				}
+			}(p)
+		}
+		wg.Wait()
+		return providerTestMsg{errs: errs}
+	}
+}
+
 type providerStateMsg struct {
 	states map[string]store.ProviderState
 	err    error
@@ -3865,11 +4164,17 @@ func yesNo(value bool) string {
 	return "no"
 }
 
-func browseCmd(meta metaProvider, genre string, page int, includeAdult bool) tea.Cmd {
+func browseCmd(meta metaProvider, genre, season string, year, page int, includeAdult bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		items, err := meta.Browse(ctx, genre, page, includeAdult)
+		var items []metadata.Info
+		var err error
+		if season != "" {
+			items, err = meta.BrowseSeason(ctx, season, year, page, includeAdult)
+		} else {
+			items, err = meta.Browse(ctx, genre, page, includeAdult)
+		}
 		return browseMsg{genre: genre, page: page, items: items, err: err}
 	}
 }
@@ -3928,8 +4233,12 @@ type streamMsg struct {
 	stream   provider.Stream
 	anime    provider.Anime
 	episode  provider.Episode
+	episodes []provider.Episode
+	provider provider.Provider
 	start    float64
 	duration float64
+	// fallback marks a retry through another adapter, so a failure here is final.
+	fallback bool
 	err      error
 }
 
@@ -4059,7 +4368,7 @@ func streamCmd(st *store.Store, p provider.Provider, anime provider.Anime, episo
 		defer cancel()
 		stream, err := p.Stream(ctx, episode)
 		if err != nil {
-			return streamMsg{err: err}
+			return streamMsg{anime: anime, episode: episode, err: err}
 		}
 		var saved store.Progress
 		if st != nil {
@@ -4073,6 +4382,99 @@ func streamCmd(st *store.Store, p provider.Provider, anime provider.Anime, episo
 			duration: saved.Duration,
 		}
 	}
+}
+
+// fallbackCmd retries an episode on the next adapter that has a matching title.
+// It runs at most one full pass; a failure there is final.
+func fallbackCmd(st *store.Store, providers []provider.Provider, skip string, anime provider.Anime, number int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		var lastErr error
+		for _, p := range providers {
+			if p.Name() == skip {
+				continue
+			}
+			animes, err := p.Search(ctx, anime.Title)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			match, ok := bestTitleMatch(anime.Title, animes)
+			if !ok {
+				continue
+			}
+			episodes, err := p.Episodes(ctx, match)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			index := -1
+			for i, ep := range episodes {
+				// Episode numbers are the only cross-site signal; when they
+				// disagree this provider is skipped rather than guessed.
+				if ep.Number == number {
+					index = i
+					break
+				}
+			}
+			if index < 0 {
+				continue
+			}
+			ep := episodes[index]
+			stream, err := p.Stream(ctx, ep)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			var saved store.Progress
+			if st != nil {
+				saved, _, _ = st.Progress(ctx, p.Name(), ep.URL)
+			}
+			return streamMsg{
+				stream:   stream,
+				anime:    match,
+				episode:  ep,
+				episodes: episodes,
+				provider: p,
+				start:    saved.Position,
+				duration: saved.Duration,
+				fallback: true,
+			}
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("no other source had E%03d", number)
+		}
+		return streamMsg{anime: anime, episode: provider.Episode{Number: number}, err: lastErr, fallback: true}
+	}
+}
+
+// bestTitleMatch only accepts a normalized title match. A near miss would play
+// the wrong show, which is worse than no fallback.
+func bestTitleMatch(title string, animes []provider.Anime) (provider.Anime, bool) {
+	want := normalizeTitle(title)
+	for _, a := range animes {
+		if normalizeTitle(a.Title) == want {
+			return a, true
+		}
+	}
+	return provider.Anime{}, false
+}
+
+// normalizeTitle lowercases, drops punctuation, and strips a trailing Dub/Sub
+// suffix so "Naruto: Shippuden (Dub)" matches "Naruto Shippuden".
+func normalizeTitle(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	for _, suffix := range []string{"dub", "sub"} {
+		out = strings.TrimSuffix(out, suffix)
+	}
+	return out
 }
 
 func waitFor(ch <-chan dlEvent) tea.Cmd {

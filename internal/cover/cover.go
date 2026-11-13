@@ -54,14 +54,34 @@ func (r *Renderer) SetNative(k NativeKind) {
 }
 
 // Native reports the protocol used by RenderNative. Precedence: an explicit
-// SetNative value, then Kitty (KITTY_WINDOW_ID or TERM=xterm-kitty), then
-// iTerm2 (TERM_PROGRAM=iTerm.app or LC_TERMINAL=iTerm2), then NativeNone.
+// SetNative value or WEEB_COVER, then the kitty protocol (kitty, Ghostty,
+// WezTerm, Konsole), then iTerm2, then NativeNone.
 func (r *Renderer) Native() NativeKind {
 	if r.nativeSet {
 		return r.native
 	}
+	return detectNative()
+}
+
+// detectNative reads the environment once per call; it is cheap and keeps
+// tests honest, unlike caching at process start.
+func detectNative() NativeKind {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("WEEB_COVER"))) {
+	case "kitty":
+		return NativeKitty
+	case "iterm2", "iterm":
+		return NativeITerm2
+	case "none", "blocks", "off":
+		return NativeNone
+	}
+	term := strings.ToLower(os.Getenv("TERM"))
 	if os.Getenv("KITTY_WINDOW_ID") != "" ||
-		strings.Contains(strings.ToLower(os.Getenv("TERM")), "xterm-kitty") {
+		strings.Contains(term, "xterm-kitty") ||
+		strings.Contains(term, "xterm-ghostty") ||
+		strings.EqualFold(os.Getenv("TERM_PROGRAM"), "ghostty") ||
+		strings.EqualFold(os.Getenv("TERM_PROGRAM"), "WezTerm") ||
+		os.Getenv("WEZTERM_EXECUTABLE") != "" ||
+		os.Getenv("KONSOLE_VERSION") != "" {
 		return NativeKitty
 	}
 	if strings.EqualFold(os.Getenv("TERM_PROGRAM"), "iTerm.app") ||
@@ -69,6 +89,30 @@ func (r *Renderer) Native() NativeKind {
 		return NativeITerm2
 	}
 	return NativeNone
+}
+
+// inTmux reports a multiplexer that hides graphics escapes unless they are
+// wrapped in a passthrough DCS.
+func inTmux() bool { return os.Getenv("TMUX") != "" }
+
+// wrapTmux escapes a control sequence for tmux's passthrough channel, which
+// expects every ESC inside the payload to be doubled.
+func wrapTmux(seq string) string {
+	if !inTmux() {
+		return seq
+	}
+	return "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
+}
+
+// ClearNative returns the escape that deletes inline kitty images, so the cover
+// does not linger over the TUI after the viewer closes. Empty for other
+// terminals: iTerm2's inline images belong to the cell flow and disappear with
+// the redraw.
+func ClearNative() string {
+	if detectNative() != NativeKitty {
+		return ""
+	}
+	return wrapTmux("\x1b_Ga=d,d=A\x1b\\")
 }
 
 // New returns a Renderer with a 15s client and truecolor detected from
@@ -142,6 +186,9 @@ func (r *Renderer) RenderNative(ctx context.Context, url string, width, height i
 	if err != nil {
 		return "", err
 	}
+	// Shrink before base64: a 2000px cover becomes a 1 MB escape that the
+	// terminal then throws away when it scales to cells.
+	img = shrink(img, width*16, height*32)
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return "", fmt.Errorf("cover: encode: %w", err)
@@ -149,10 +196,19 @@ func (r *Renderer) RenderNative(ctx context.Context, url string, width, height i
 	data := base64.StdEncoding.EncodeToString(buf.Bytes())
 
 	if kind == NativeITerm2 {
-		return fmt.Sprintf("\x1b]1337;File=inline=1;width=%dpx;height=%dpx;preserveAspectRatio=1:%s\x07",
-			width*8, height*16, data), nil
+		return wrapTmux(fmt.Sprintf("\x1b]1337;File=inline=1;width=%dpx;height=%dpx;preserveAspectRatio=1:%s\x07",
+			width*8, height*16, data)), nil
 	}
-	return kittyEscape(width, height, data), nil
+	return wrapTmux(kittyEscape(width, height, data)), nil
+}
+
+// shrink downsamples only when the source is larger than the target; covers
+// that are already small are decoded at native size.
+func shrink(src image.Image, width, height int) image.Image {
+	if width < 1 || height < 1 || src.Bounds().Dx() <= width && src.Bounds().Dy() <= height {
+		return src
+	}
+	return resize(src, width, height)
 }
 
 // kittyEscape builds the graphics protocol command; a payload over 4096 bytes

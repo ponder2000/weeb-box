@@ -41,6 +41,7 @@ type Info struct {
 	Rating      string // age rating: PG-13, R, R+, Rx, 18+, Not rated
 	Adult       bool
 	Score       float64 // AniList averageScore (0-100), 0 when unrated
+	Duration    int     // minutes per episode, 0 when AniList has no runtime
 	Description string
 }
 
@@ -83,6 +84,7 @@ const mediaFields = `
 	tags { name isMediaSpoiler }
 	isAdult
 	averageScore
+	duration
 	description(asHtml: false)
 `
 
@@ -97,6 +99,17 @@ const browseQuery = `query ($genre: String, $page: Int) { Page(page: $page, perP
 const browseQueryAll = `query ($genre: String, $page: Int) { Page(page: $page, perPage: 20) {
 	media(genre: $genre, type: ANIME, sort: POPULARITY_DESC) {` + mediaFields + `}
 } }`
+
+const browseSeasonQuery = `query ($season: MediaSeason, $seasonYear: Int, $page: Int) { Page(page: $page, perPage: 20) {
+	media(season: $season, seasonYear: $seasonYear, type: ANIME, isAdult: false, sort: POPULARITY_DESC) {` + mediaFields + `}
+} }`
+
+const browseSeasonQueryAll = `query ($season: MediaSeason, $seasonYear: Int, $page: Int) { Page(page: $page, perPage: 20) {
+	media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC) {` + mediaFields + `}
+} }`
+
+// seasons is AniList's MediaSeason enum order, calendar order within a year.
+var seasons = [...]string{"WINTER", "SPRING", "SUMMER", "FALL"}
 
 type anilistMedia struct {
 	Title struct {
@@ -113,6 +126,7 @@ type anilistMedia struct {
 	} `json:"tags"`
 	IsAdult      bool    `json:"isAdult"`
 	AverageScore float64 `json:"averageScore"`
+	Duration     int     `json:"duration"`
 	Description  string  `json:"description"`
 }
 
@@ -135,6 +149,7 @@ func (m anilistMedia) info() Info {
 		Genres:      m.Genres,
 		Adult:       m.IsAdult,
 		Score:       m.AverageScore,
+		Duration:    m.Duration,
 		Description: m.Description,
 	}
 	if info.Title == "" {
@@ -197,8 +212,26 @@ func (c *Client) Browse(ctx context.Context, genre string, page int, includeAdul
 	if includeAdult {
 		query = browseQueryAll
 	}
+	return c.browse(ctx, query, map[string]any{"genre": genreVar, "page": page})
+}
+
+// BrowseSeason lists popular anime from one AniList season. includeAdult behaves
+// like Browse: false filters adult titles, true lets AniList return both.
+func (c *Client) BrowseSeason(ctx context.Context, season string, year, page int, includeAdult bool) ([]Info, error) {
+	if page < 1 {
+		page = 1
+	}
+	query := browseSeasonQuery
+	if includeAdult {
+		query = browseSeasonQueryAll
+	}
+	season = strings.ToUpper(strings.TrimSpace(season))
+	return c.browse(ctx, query, map[string]any{"season": season, "seasonYear": year, "page": page})
+}
+
+// browse runs a Page/media query and falls back to an AniList-only rating.
+func (c *Client) browse(ctx context.Context, query string, vars map[string]any) ([]Info, error) {
 	var resp anilistResponse
-	vars := map[string]any{"genre": genreVar, "page": page}
 	if err := c.post(ctx, query, vars, &resp); err != nil {
 		return nil, err
 	}
@@ -209,6 +242,42 @@ func (c *Client) Browse(ctx context.Context, genre string, page int, includeAdul
 		items = append(items, info)
 	}
 	return items, nil
+}
+
+// SeasonFor returns the AniList season containing t, in UTC.
+func SeasonFor(t time.Time) (string, int) {
+	t = t.UTC()
+	return seasons[(int(t.Month())-1)/3], t.Year()
+}
+
+// NextSeason advances one season, rolling the year at FALL to WINTER.
+func NextSeason(season string, year int) (string, int) {
+	return shiftSeason(season, year, 1)
+}
+
+// PrevSeason steps back one season, rolling the year at WINTER to FALL.
+func PrevSeason(season string, year int) (string, int) {
+	return shiftSeason(season, year, -1)
+}
+
+// shiftSeason leaves an unrecognized season name unchanged.
+func shiftSeason(season string, year, step int) (string, int) {
+	season = strings.ToUpper(strings.TrimSpace(season))
+	for i, name := range seasons {
+		if name == season {
+			next := i + step
+			if next < 0 {
+				next += len(seasons)
+				year--
+			}
+			if next >= len(seasons) {
+				next -= len(seasons)
+				year++
+			}
+			return seasons[next], year
+		}
+	}
+	return season, year
 }
 
 func fallbackRating(adult bool) string {

@@ -44,25 +44,26 @@ the same status and commands. Press `r` to recheck after installing, or
 
 ## Keys
 
-Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `shift+tab` cycles Home → Browse → Library → Downloads → Providers → Settings → Home, and inserts **Now playing** after Home while a player is open. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+b` browses genres; `ctrl+o` opens Settings.
+Global: `ctrl+c` cancels a running download or playback and quits. `q` quits from any screen except the focused search box, where it is typed as text. `shift+tab` cycles Home → Browse → Library → Downloads → Providers → Stats → Settings → Home, and inserts **Now playing** after Home while a player is open. `ctrl+h` toggles help anywhere; `?` is a shortcut outside the search box. `ctrl+l` opens the downloaded library; `ctrl+p` opens the provider list; `ctrl+b` browses genres; `s` opens watch stats; `ctrl+o` opens Settings.
 
 | screen  | keys |
 | ------- | ---- |
 | home — search focused | type a query, `enter` search, `tab`/`↓` move to lists, `esc` quit |
 | home — continue watching / recent searches | `↑`/`↓` move, `enter` resume or re-run search, `x` remove the selected anime or query, `tab` next list, `esc` or `/` back to search box, `ctrl+r` clear search history (recent searches only), `q` quit |
 | results | `↑`/`↓` move, `enter` open episodes, `i` view cover, `v` view download queue, `esc` home |
-| episodes | `↑`/`↓` move, `enter` play, `d` download selected, `a` download from selected to the end, `i` view cover, `v` view queue, `esc` back |
+| episodes | `↑`/`↓` move, `enter` play, `d` download selected, `a` download from selected to the end, `w` mark watched/unwatched, `i` view cover, `v` view queue, `esc` back — rows carry `filler`/`mixed` badges when a filler list is known |
 | playing | `[`/`]` previous/next episode, `n`/`p` same on this screen, `esc` back to the previous screen, `p` reopens the stats from other screens |
-| downloads | `x` cancel, `r` retry last failed episode, `o` open folder, `esc` back |
+| downloads | `x` cancel, `r` retry the failed episode or the cancelled queue, `o` open folder, `esc` back |
 | library | `↑`/`↓` move, `enter` play the local file, `o` open folder, `r` rescan, `esc` home |
-| providers | `space`/`enter` enable or disable, `r` refresh status, `esc` back |
+| providers | `space`/`enter` enable or disable, `t` test every provider, `r` refresh status, `esc` back |
+| stats | `r` refresh, `s`/`esc` back |
 | browse | `↑`/`↓` genre or title, `n`/`]` next page, `p`/`[` previous page, `i` view cover, `enter` drill in/search providers, `esc` back |
 | settings | `↑`/`↓` row, `space`/`←`/`→` cycle quality or theme, `space`/`enter` toggle Hide adult, `enter` edit download dir, `esc` back |
 | setup | `r` recheck dependencies, `enter`/`esc` continue |
 
-Only one download job runs at a time; starting a queue stops at the first failure. `r` retries only the last failed episode, not a cancelled queue.
+Only one download job runs at a time; a queue stops at the first failure. `r` retries the last failed episode, or the whole batch after `x` cancels it. The terminal bell rings once when a queue ends.
 
-Playback opens mpv in its own window and switches the TUI to a **Now playing** screen: anime, episode title, a live progress bar, position/duration, provider, quality, and the next episode. `[`/`]` switch episodes from the TUI (`n`/`p` also work on that screen); in the mpv window `>`/`<` or `n`/`p` do the same. `esc` leaves the stats without stopping playback, and `p` reopens them from another screen while the player is open. Closing mpv returns to the previous screen. mpv gets the OSC, resume, live progress, and the default subtitle track (English when available); `v` hides/shows subtitles, `j` cycles tracks, and the uosc CC button toggles them. ffplay gets basic keyboard controls but no live progress or subtitles. `q`/`ctrl+c` in the TUI closes the player. mpv streams HLS on demand with a short forward buffer (around 15–30 seconds), so it does not fetch the whole episode ahead of time.
+Playback opens mpv in its own window and switches the TUI to a **Now playing** screen: anime, episode title, a live progress bar, position/duration, provider, quality, and the next episode. `[`/`]` switch episodes from the TUI (`n`/`p` also work on that screen); in the mpv window `>`/`<` or `n`/`p` do the same. `esc` leaves the stats without stopping playback, and `p` reopens them from another screen while the player is open. Closing mpv returns to the previous screen. mpv gets the OSC, resume, live progress, and the default subtitle track (English when available); `v` hides/shows subtitles, `j` cycles tracks, and the uosc CC button toggles them. ffplay gets basic keyboard controls but no live progress or subtitles. `q`/`ctrl+c` in the TUI closes the player. When the selected source cannot resolve a stream, the app retries that episode on the other enabled providers, matching the title and the episode number, and pins whichever one answers; the status line names it. mpv streams HLS on demand with a short forward buffer (around 15–30 seconds), so it does not fetch the whole episode ahead of time.
 
 For a modern control bar, install [uosc](https://github.com/tomasklaen/uosc) and copy `themes/mpv/uosc.conf` to `~/.config/mpv/script-opts/uosc.conf`. The app auto-detects uosc and disables the built-in OSC; the theme replaces `master.m3u8` with the anime/episode title. Re-copy that config after updating to pick up the CC toggle.
 
@@ -71,6 +72,20 @@ Mouse: wheel scrolls the list under the pointer; click a row to select it, click
 The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete. Long titles auto-scroll horizontally in search results, resume rows, the library, and the download queue; recent-search rows truncate with `…` so their time column stays aligned.
 
 Rows are color-coded: each provider has its own color, and type (`TV`, `ONA`, `Movie`…), audio (`Sub`/`Dub`), status (`Completed`/`Ongoing`/`Upcoming`), ratings, watch progress, `downloaded`, and `subs` badges use separate colors. The Mono theme collapses these to greys. `Continue watching` gives each anime a two-line entry — title, then an aligned bar, percentage, current episode, and the number of episodes with progress — and sorts by the most recently watched anime. `Recent searches` keeps one aligned line per query with the time on the right. Both panels grow with the window, and list names are not bold; colors carry the hierarchy.
+
+## Watch stats
+
+`s` opens a summary built from watch history: total watch time in hours and days,
+episodes and titles watched, downloads and their size, and the last time you
+watched. The **Genres** panel splits each title's time evenly across its AniList
+genres, so a 10-hour Action/Comedy show counts five hours in each; metadata is
+fetched for the ten longest-watched titles and cached, so the panel fills in as
+those lookups land. On terminals 30 rows or taller, **Top titles** ranks your six
+most-watched shows with proportional bars.
+
+Watch time comes from `watch_progress`: the last saved position of each episode,
+not a sum of rewatches. Finished episodes (position 0 with a duration) count
+their full duration, and marking an episode watched with `w` adds one second.
 
 ## Storage
 
@@ -96,7 +111,7 @@ The Library (`ctrl+l`) scans the download root—or a separate `-library` root�
 
 ## Providers
 
-Search runs against all enabled providers in parallel. Results show their source; selecting a result pins that provider for episodes, playback, and downloads. `ctrl+p` lists each provider with its URL, enabled state, and the time of its last successful search, and lets you disable sources you do not want. Toggles persist in SQLite.
+Search runs against all enabled providers in parallel. Results show their source; selecting a result pins that provider for episodes, playback, and downloads. If that provider cannot resolve an episode's stream, the app falls back to the other enabled sources (same title, same episode number) and keeps the one that worked. `ctrl+p` lists each provider with its URL, enabled state, and the time of its last successful search, and lets you disable sources you do not want; `t` searches a fixed title through every provider to show which sites still answer. Toggles persist in SQLite.
 
 | provider | site | search |
 | --- | --- | --- |
@@ -106,6 +121,20 @@ Search runs against all enabled providers in parallel. Results show their source
 | `kissanime` | kissanime.com.cv | WordPress REST |
 | `hianime` | hianime.ms | HTML |
 
+### Live status
+
+The table below is rewritten by [`.github/workflows/provider-live.yml`](.github/workflows/provider-live.yml), which runs each adapter's live test daily and commits the result. `❌ failing` means that site, its selectors, or the shared MegaPlay key/IV needs a fix.
+
+<!-- provider-status:start -->
+| Provider | Live check | Checked (UTC) |
+| --- | --- | --- |
+| `animekai` | ✅ working | 2026-11-13 |
+| `anizone` | ✅ working | 2026-11-13 |
+| `gogoanime` | ✅ working | 2026-11-13 |
+| `hianime` | ✅ working | 2026-11-13 |
+| `kissanime` | ✅ working | 2026-11-13 |
+<!-- provider-status:end -->
+
 The MegaPlay resolver (data-id → encrypted sources → HLS + WebVTT) is shared by all providers in `internal/provider/megaplay`.
 
 `internal/provider` defines `Provider` (`Name`, `Search`, `Episodes`, `Stream`). To add a source, implement it in `internal/provider/<name>` and add it to the registry in `main.go`. `Stream` returns a media URL, optional `Referer`, and optional subtitle tracks, which `internal/media` forwards to ffmpeg, ffprobe, mpv, or ffplay.
@@ -113,6 +142,25 @@ The MegaPlay resolver (data-id → encrypted sources → HLS + WebVTT) is shared
 `-base` overrides the gogoanime host only; the other providers use their defaults.
 
 KissAnime.tv.in was evaluated but is not wired yet: its search is an AJAX/CSRF endpoint and its player path needs a dedicated adapter.
+
+## Filler lists and episode details
+
+Episode rows are checked against [animefillerlist.com](https://www.animefillerlist.com):
+`filler` episodes get a warning-colored badge, `mixed` (canon/filler) a muted one,
+and the Episode pane names the kind. The lookup happens when the episode list
+loads: the provider's title is tried first, then AniList's English title, and the
+answer is cached in SQLite for 30 days. It is deliberately conservative — badges
+only appear when the list's highest episode number matches the provider's, so a
+site that splits a series into seasons cannot mislabel episodes. When the lookup
+fails, the status line says "filler list unavailable" and nothing is badged. The
+site is the source of truth; episode numbering differences between sites are not
+reconciled beyond that check.
+
+The Episode pane also shows **minutes per episode** from AniList and the
+**qualities the stream actually offers** (`quality 1080p · 720p · 360p`). Quality
+is read from the HLS master playlist when you highlight an episode, cached per
+episode, and can take a second per episode because it resolves the stream; the
+result is what playback will pick from.
 
 ## Metadata, covers, and categories
 
@@ -130,12 +178,19 @@ the compact rating/genres line, and the episode detail pane shows rating,
 genres, and tags.
 
 Press `i` on Results, Browse, or Episodes to open the selected title's cover.
-iTerm2 and Kitty draw it inline through their own image protocol; other
-terminals get a large quadrant-block viewer (about 60% of the terminal, 2:3) with
-title, rating, genres, and tags (`esc`/`enter` back).
+The terminal draws it inline when it speaks the kitty graphics protocol (kitty,
+Ghostty, WezTerm, Konsole) or iTerm2's inline-image protocol, which gives a full
+resolution image instead of colored blocks; inside `tmux` the escapes are wrapped
+for passthrough. Every other terminal gets the quadrant-block viewer (about 60%
+of the terminal, 2:3) with title, rating, genres, and tags (`esc`/`enter` back).
+Detection is by terminal environment, so if yours supports images but is not
+recognized, set `WEEB_COVER=kitty|iterm2|blocks`; `blocks` forces the ASCII path.
+The cover is downscaled before it is sent, and kitty images are deleted when the
+viewer closes.
 
-`ctrl+b` opens **Browse by genre**. Pick a genre, then a title, and the normal
-multi-provider search runs for that title. Browse rows are a small table:
+`ctrl+b` opens **Browse**. The first three rows are **This season**, **Last
+season**, and **Next season** from AniList; the rest are genres. Pick a row, then
+a title, and the normal multi-provider search runs for that title. Browse rows are a small table:
 rating, genres, and score sit in fixed columns. `n`/`]` and `p`/`[` page through
 the popular list; an empty page reports "no more titles". Browse follows **Hide
 adult** in Settings: off (default) includes adult titles and the Hentai genre,
@@ -179,6 +234,8 @@ Live checks hit the real site and are gated:
 WEEB_LIVE=1 go test ./internal/provider/gogo -run Live -v
 WEEB_LIVE=1 go test ./internal/media -run Live -v
 ```
+
+CI runs the unit suite on every push and pull request (`.github/workflows/ci.yml`); the daily `provider-live` workflow runs the live checks and commits the status table above. It needs the repo to allow Actions to push to `main` (Settings → Actions → General → Workflow permissions → Read and write, plus any branch-protection bypass for `github-actions[bot]`).
 
 ## Why not just use the website?
 

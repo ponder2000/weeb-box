@@ -235,3 +235,108 @@ func TestDeleteProgressAndSearch(t *testing.T) {
 		t.Fatalf("searches = %+v err=%v", searches, err)
 	}
 }
+
+func TestDeleteProgressForEpisode(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	for ep := 1; ep <= 2; ep++ {
+		if err := st.SaveProgress(ctx, Progress{
+			Provider: "gogoanime", EpisodeURL: "https://x/ep" + string(rune('0'+ep)),
+			AnimeURL: "https://x/anime", AnimeTitle: "Frieren",
+			EpisodeNumber: ep, Position: 10, Duration: 100,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.SaveProgress(ctx, Progress{
+		Provider: "animekai", EpisodeURL: "https://x/ep1",
+		AnimeURL: "https://x/anime", AnimeTitle: "Frieren",
+		EpisodeNumber: 1, Position: 20, Duration: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.DeleteProgressForEpisode(ctx, "gogoanime", "https://x/ep1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := st.Progress(ctx, "gogoanime", "https://x/ep1"); err != nil || ok {
+		t.Fatalf("deleted episode ok=%v err=%v", ok, err)
+	}
+	kept, ok, err := st.Progress(ctx, "gogoanime", "https://x/ep2")
+	if err != nil || !ok || kept.EpisodeNumber != 2 || kept.Position != 10 {
+		t.Fatalf("sibling episode = %+v ok=%v err=%v", kept, ok, err)
+	}
+	if err := st.DeleteProgressForEpisode(ctx, "gogoanime", "https://x/ep1"); err != nil {
+		t.Fatalf("second delete err=%v", err)
+	}
+	if other, ok, err := st.Progress(ctx, "animekai", "https://x/ep1"); err != nil || !ok || other.Position != 20 {
+		t.Fatalf("other provider = %+v ok=%v err=%v", other, ok, err)
+	}
+}
+
+func TestWatchStats(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	save := func(provider, episodeURL, animeURL, title string, episode int, position, duration float64) {
+		t.Helper()
+		if err := st.SaveProgress(ctx, Progress{
+			Provider: provider, EpisodeURL: episodeURL,
+			AnimeURL: animeURL, AnimeTitle: title,
+			EpisodeNumber: episode, Position: position, Duration: duration,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Title A: finished episode (position 0, full duration) plus half-watched.
+	save("gogoanime", "https://x/a-e1", "https://x/a", "A", 1, 0, 1200)
+	save("gogoanime", "https://x/a-e2", "https://x/a", "A", 2, 300, 1200)
+	// Title B: no duration known, resume position only.
+	save("gogoanime", "https://x/b-e1", "https://x/b", "B", 1, 600, 0)
+
+	stats, err := st.WatchStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if stats[0].AnimeTitle != "A" || stats[0].Episodes != 2 || stats[0].Seconds != 1500 {
+		t.Fatalf("first = %+v", stats[0])
+	}
+	if stats[1].AnimeTitle != "B" || stats[1].Episodes != 1 || stats[1].Seconds != 600 {
+		t.Fatalf("second = %+v", stats[1])
+	}
+	for _, s := range stats {
+		if s.LastWatched <= 0 {
+			t.Fatalf("%s last watched = %d", s.AnimeTitle, s.LastWatched)
+		}
+	}
+
+	if err := st.DeleteProgress(ctx, "gogoanime", "https://x/a", "A"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = st.WatchStats(ctx)
+	if err != nil || len(stats) != 1 || stats[0].AnimeTitle != "B" {
+		t.Fatalf("after delete = %+v err=%v", stats, err)
+	}
+
+	empty, err := Open(filepath.Join(t.TempDir(), "empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer empty.Close()
+	stats, err = empty.WatchStats(ctx)
+	if err != nil || len(stats) != 0 {
+		t.Fatalf("empty = %+v err=%v", stats, err)
+	}
+}

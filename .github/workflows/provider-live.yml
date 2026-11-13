@@ -1,0 +1,42 @@
+name: provider-live
+
+# Adapter live checks are plain HTTP + goquery against the sites, so ubuntu needs
+# no ffmpeg. The unit suite (which does need it) lives in ci.yml.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: provider-live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - id: status
+        run: scripts/provider-status.sh
+        continue-on-error: true
+      - name: Commit status table
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git diff --quiet -- README.md; then
+            echo "README unchanged"
+            exit 0
+          fi
+          git add README.md
+          git commit -m "Update provider live status from ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git pull --rebase origin main
+          git push
+      - if: always() && steps.status.outcome == 'failure'
+        run: exit 1

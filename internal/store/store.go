@@ -53,6 +53,14 @@ type Stats struct {
 	Watched   int
 }
 
+// WatchStat is one title's share of watch time; the stats screen ranks these.
+type WatchStat struct {
+	AnimeTitle  string
+	Episodes    int
+	Seconds     float64
+	LastWatched int64
+}
+
 type ProviderState struct {
 	Name      string
 	Enabled   bool
@@ -220,6 +228,12 @@ func (s *Store) DeleteProgress(ctx context.Context, provider, animeURL, animeTit
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM watch_progress WHERE provider = ? AND anime_url = ?`, provider, animeURL)
+	return err
+}
+
+// DeleteProgressForEpisode removes the progress row for one episode.
+func (s *Store) DeleteProgressForEpisode(ctx context.Context, provider, episodeURL string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM watch_progress WHERE provider = ? AND episode_url = ?`, provider, episodeURL)
 	return err
 }
 
@@ -412,4 +426,30 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM watch_progress WHERE position > 0`).Scan(&stats.Watched)
 	return stats, err
+}
+
+// WatchStats totals watch time per title, longest first.
+func (s *Store) WatchStats(ctx context.Context) ([]WatchStat, error) {
+	// A finished episode is stored as position 0 with a duration, so count the
+	// duration there; everything else contributes its resume position.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT anime_title, COUNT(*),
+			COALESCE(SUM(CASE WHEN position > 0 THEN position ELSE duration END), 0),
+			MAX(updated_at)
+		FROM watch_progress
+		GROUP BY anime_title
+		ORDER BY 3 DESC, 1 ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WatchStat
+	for rows.Next() {
+		var w WatchStat
+		if err := rows.Scan(&w.AnimeTitle, &w.Episodes, &w.Seconds, &w.LastWatched); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
 }

@@ -117,6 +117,9 @@ type fakeMeta struct {
 	genre   string
 	page    int
 	adult   bool
+	seasons int
+	season  string
+	year    int
 }
 
 func (f *fakeMeta) Lookup(context.Context, string) (metadata.Info, error) {
@@ -127,6 +130,12 @@ func (f *fakeMeta) Lookup(context.Context, string) (metadata.Info, error) {
 func (f *fakeMeta) Browse(_ context.Context, genre string, page int, includeAdult bool) ([]metadata.Info, error) {
 	f.browses++
 	f.genre, f.page, f.adult = genre, page, includeAdult
+	return f.items, f.err
+}
+
+func (f *fakeMeta) BrowseSeason(_ context.Context, season string, year, page int, includeAdult bool) ([]metadata.Info, error) {
+	f.seasons++
+	f.season, f.year, f.page, f.adult = season, year, page, includeAdult
 	return f.items, f.err
 }
 
@@ -940,9 +949,11 @@ func TestGenreNavigation(t *testing.T) {
 
 	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlB})
 	m = updated.(Model)
-	if m.screen != screenGenres || len(m.main.Items()) != len(metadata.Genres)+1 {
+	if m.screen != screenGenres || len(m.main.Items()) != len(metadata.Genres)+4 {
 		t.Fatalf("screen=%v items=%d", m.screen, len(m.main.Items()))
 	}
+	// The three season shortcuts come first; pick the first real genre.
+	m.main.Select(3)
 
 	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = runCmd(t, updated.(Model), cmd)
@@ -981,7 +992,7 @@ func TestBrowseFollowsAdultSetting(t *testing.T) {
 	if hasListItemTitle(m.main, "Hentai") {
 		t.Fatal("Hentai genre shown while hiding adult")
 	}
-	updated, cmd := m.startBrowse("Action")
+	updated, cmd := m.startBrowse(item{title: "Action"})
 	m = runCmd(t, updated.(Model), cmd)
 	if fm.adult {
 		t.Fatal("browse requested adult titles while hiding adult")
@@ -994,7 +1005,7 @@ func TestBrowseFollowsAdultSetting(t *testing.T) {
 	if !hasListItemTitle(m.main, "Hentai") {
 		t.Fatal("Hentai genre missing when adult is allowed")
 	}
-	updated, cmd = m.startBrowse("Hentai")
+	updated, cmd = m.startBrowse(item{title: "Hentai"})
 	m = runCmd(t, updated.(Model), cmd)
 	if !fm.adult {
 		t.Fatal("browse kept the adult filter off")
@@ -1554,7 +1565,7 @@ func TestAutoplaySetting(t *testing.T) {
 func TestShiftTabCyclesMainScreens(t *testing.T) {
 	m := New(nil, t.TempDir(), nil)
 	m.width, m.height = 120, 40
-	order := []screen{screenGenres, screenLibrary, screenDownloads, screenProviders, screenSettings, screenHome}
+	order := []screen{screenGenres, screenLibrary, screenDownloads, screenProviders, screenStats, screenSettings, screenHome}
 	for _, want := range order {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 		m = updated.(Model)
@@ -2040,5 +2051,243 @@ func TestPlayingSkipKeys(t *testing.T) {
 	updated, _ = m.handleKey(runeKey(']'))
 	if got := updated.(Model).status; !strings.Contains(got, "No next episode") {
 		t.Fatalf("last episode status = %q", got)
+	}
+}
+
+// failProvider fails at stream resolution, which is the fallback trigger.
+type failProvider struct{ stubProvider }
+
+func (failProvider) Name() string { return "gogoanime" }
+
+func (failProvider) Stream(context.Context, provider.Episode) (provider.Stream, error) {
+	return provider.Stream{}, errors.New("410 gone")
+}
+
+// otherProvider answers with the same title so a fallback can match it.
+type otherProvider struct{ stubProvider }
+
+func (otherProvider) Name() string    { return "animekai" }
+func (otherProvider) SiteURL() string { return "https://animekai.example" }
+
+func (otherProvider) Search(context.Context, string) ([]provider.Anime, error) {
+	return []provider.Anime{{Title: "Show", URL: "https://animekai.example/show"}}, nil
+}
+
+func (otherProvider) Episodes(context.Context, provider.Anime) ([]provider.Episode, error) {
+	return []provider.Episode{{Number: 1, URL: "https://animekai.example/show/1"}}, nil
+}
+
+func (otherProvider) Stream(context.Context, provider.Episode) (provider.Stream, error) {
+	return provider.Stream{URL: "https://cdn.example/master.m3u8"}, nil
+}
+
+func TestFallbackTriesOtherProviders(t *testing.T) {
+	m := New([]provider.Provider{failProvider{}, otherProvider{}}, t.TempDir(), nil)
+	m.prov = failProvider{}
+	m.anime = provider.Anime{Title: "Show", URL: "https://gogoanime.example/show"}
+	m.episodes = []provider.Episode{{Number: 1, URL: "https://gogoanime.example/show/1"}}
+	m.playReturn = screenEpisodes
+
+	next, cmd := m.Update(streamMsg{
+		anime:   m.anime,
+		episode: m.episodes[0],
+		err:     errors.New("410 gone"),
+	})
+	if cmd == nil {
+		t.Fatal("no fallback command")
+	}
+	if got := next.(Model).status; !strings.Contains(got, "trying other sources") {
+		t.Errorf("status = %q", got)
+	}
+
+	msg, ok := cmd().(streamMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("fallback msg = %#v", msg)
+	}
+	if msg.provider == nil || msg.provider.Name() != "animekai" {
+		t.Fatalf("provider = %#v", msg.provider)
+	}
+	if msg.episode.Number != 1 || len(msg.episodes) != 1 {
+		t.Errorf("episode = %#v, episodes = %v", msg.episode, msg.episodes)
+	}
+	if !msg.fallback {
+		t.Error("fallback flag not set")
+	}
+
+	// Adopting the new adapter repoints the episode list at its URLs.
+	adopted := next.(Model)
+	adopted.adoptProvider(msg.provider, msg.anime, msg.episodes, msg.episode.Number)
+	if adopted.providerName() != "animekai" || adopted.episodes[0].URL != "https://animekai.example/show/1" {
+		t.Errorf("provider = %q, episodes = %v", adopted.providerName(), adopted.episodes)
+	}
+	if adopted.progressByURL == nil {
+		t.Error("progress map not reset for the new URLs")
+	}
+}
+
+func TestFallbackStopsAfterOnePass(t *testing.T) {
+	m := New([]provider.Provider{failProvider{}, otherProvider{}}, t.TempDir(), nil)
+	m.prov = failProvider{}
+	m.playReturn = screenEpisodes
+
+	_, cmd := m.Update(streamMsg{err: errors.New("410 gone"), fallback: true})
+	if cmd != nil {
+		t.Fatal("a failed fallback must not retry again")
+	}
+}
+
+func TestBestTitleMatch(t *testing.T) {
+	animes := []provider.Anime{
+		{Title: "Show: Shippuden (Dub)", URL: "dub"},
+		{Title: "Something Else", URL: "other"},
+	}
+	if got, ok := bestTitleMatch("show shippuden", animes); !ok || got.URL != "dub" {
+		t.Errorf("match = %#v, %v", got, ok)
+	}
+	if _, ok := bestTitleMatch("Show Shippuden Movie", animes); ok {
+		t.Error("a near miss must not match")
+	}
+}
+
+func TestGenresListSeasons(t *testing.T) {
+	meta := &fakeMeta{}
+	m := New(nil, t.TempDir(), nil)
+	m.meta = meta
+
+	next, _ := m.openGenres()
+	var cmd tea.Cmd
+	model := next.(Model)
+	items := model.main.Items()
+	if len(items) < 3 {
+		t.Fatalf("items = %d", len(items))
+	}
+	first, ok := items[0].(item)
+	if !ok || first.title != "This season" || first.season == "" {
+		t.Fatalf("first item = %#v", items[0])
+	}
+
+	next, cmd = model.startBrowse(first)
+	if cmd == nil {
+		t.Fatal("no browse command")
+	}
+	model = runCmd(t, next.(Model), cmd)
+	if meta.seasons != 1 || meta.browses != 0 {
+		t.Errorf("seasons = %d, browses = %d", meta.seasons, meta.browses)
+	}
+	if meta.season != first.season || meta.year != first.year {
+		t.Errorf("season = %q %d", meta.season, meta.year)
+	}
+	if got := model.browseSeason; got != first.season {
+		t.Errorf("browseSeason = %q", got)
+	}
+
+	// A genre row still goes through Browse.
+	genre := items[5].(item)
+	next, cmd = model.startBrowse(genre)
+	if cmd == nil {
+		t.Fatal("no genre browse command")
+	}
+	model = runCmd(t, next.(Model), cmd)
+	if meta.browses != 1 {
+		t.Errorf("browses = %d", meta.browses)
+	}
+}
+
+func TestToggleWatched(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "watched.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	m := New([]provider.Provider{stubProvider{}}, t.TempDir(), st)
+	m.prov = stubProvider{}
+	m.anime = provider.Anime{Title: "Show", URL: "https://gogoanime.example/show"}
+	m.episodes = []provider.Episode{{Number: 1, URL: "https://gogoanime.example/show/1"}}
+	m.progressByURL = map[string]store.Progress{}
+	m.main.SetItems(m.episodeItems())
+	m.screen = screenEpisodes
+
+	next, _ := m.toggleWatched()
+	m = next.(Model)
+	saved, ok, err := st.Progress(context.Background(), "gogoanime", m.episodes[0].URL)
+	if err != nil || !ok {
+		t.Fatalf("progress = %v, %v, %v", saved, ok, err)
+	}
+	if saved.Position != 0 || saved.Duration == 0 {
+		t.Errorf("watched row = %+v", saved)
+	}
+	if desc := m.main.Items()[0].(item).desc; !strings.Contains(desc, "done") {
+		t.Errorf("badge = %q", desc)
+	}
+
+	next, _ = m.toggleWatched()
+	m = next.(Model)
+	if _, ok, _ := st.Progress(context.Background(), "gogoanime", m.episodes[0].URL); ok {
+		t.Error("row still present after unwatch")
+	}
+	if _, ok := m.progressByURL[m.episodes[0].URL]; ok {
+		t.Error("in-memory progress not cleared")
+	}
+}
+
+// deref accepts either the value or pointer model that handlers return.
+func deref(m tea.Model) Model {
+	if p, ok := m.(*Model); ok {
+		return *p
+	}
+	return m.(Model)
+}
+
+func TestCancelledQueueRetries(t *testing.T) {
+	m := New([]provider.Provider{failProvider{}}, t.TempDir(), nil)
+	m.prov = failProvider{}
+	m.anime = provider.Anime{Title: "Show", URL: "https://gogoanime.example/show"}
+	m.quality = "auto"
+
+	episodes := []provider.Episode{{Number: 1, URL: "1"}, {Number: 2, URL: "2"}}
+	next, _ := m.startDownload(episodes)
+	m = *next.(*Model)
+	// Nothing reads the channel, so the queue stays active for the cancel.
+	m.main.SetItems(nil)
+	m.screen = screenDownloads
+
+	next, _ = m.handleKey(runeKey('x'))
+	m = next.(Model)
+	if len(m.cancelled) != 2 {
+		t.Fatalf("cancelled = %d", len(m.cancelled))
+	}
+
+	next, _ = m.handleKey(runeKey('r'))
+	m = deref(next)
+	if len(m.queue) != 2 {
+		t.Fatalf("queue after retry = %d", len(m.queue))
+	}
+	if !m.downloading {
+		t.Error("retry did not restart the queue")
+	}
+	if len(m.cancelled) != 0 {
+		t.Error("cancelled batch not cleared by the retry")
+	}
+}
+
+func TestProviderTestResults(t *testing.T) {
+	m := New([]provider.Provider{stubProvider{}, otherProvider{}}, t.TempDir(), nil)
+	m.screen = screenProviders
+	m.main.SetItems(m.providerItems())
+
+	next, _ := m.Update(providerTestMsg{errs: map[string]error{
+		"gogoanime": nil,
+		"animekai":  errors.New("timeout"),
+	}})
+	m = next.(Model)
+	if !strings.Contains(m.status, "animekai") {
+		t.Errorf("status = %q", m.status)
+	}
+	if got := m.providerState["animekai"].LastError; got != "timeout" {
+		t.Errorf("last error = %q", got)
+	}
+	if got := m.providerState["gogoanime"].LastError; got != "" {
+		t.Errorf("healthy provider kept an error: %q", got)
 	}
 }

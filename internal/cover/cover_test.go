@@ -147,7 +147,7 @@ func TestRenderInvalidSize(t *testing.T) {
 
 func TestNativeDetect(t *testing.T) {
 	clear := func() {
-		for _, k := range []string{"KITTY_WINDOW_ID", "TERM", "TERM_PROGRAM", "LC_TERMINAL"} {
+		for _, k := range []string{"KITTY_WINDOW_ID", "TERM", "TERM_PROGRAM", "LC_TERMINAL", "WEEB_COVER", "KONSOLE_VERSION", "WEZTERM_EXECUTABLE", "TMUX"} {
 			t.Setenv(k, "")
 		}
 	}
@@ -162,6 +162,14 @@ func TestNativeDetect(t *testing.T) {
 		{"iterm program", map[string]string{"TERM_PROGRAM": "iTerm.app"}, NativeITerm2},
 		{"iterm lc", map[string]string{"LC_TERMINAL": "iTerm2"}, NativeITerm2},
 		{"kitty beats iterm", map[string]string{"KITTY_WINDOW_ID": "1", "TERM_PROGRAM": "iTerm.app"}, NativeKitty},
+		{"ghostty program", map[string]string{"TERM_PROGRAM": "ghostty"}, NativeKitty},
+		{"ghostty term", map[string]string{"TERM": "xterm-ghostty"}, NativeKitty},
+		{"wezterm program", map[string]string{"TERM_PROGRAM": "WezTerm"}, NativeKitty},
+		{"wezterm env", map[string]string{"WEZTERM_EXECUTABLE": "/usr/bin/wezterm"}, NativeKitty},
+		{"konsole", map[string]string{"KONSOLE_VERSION": "230400"}, NativeKitty},
+		{"override kitty", map[string]string{"WEEB_COVER": "kitty"}, NativeKitty},
+		{"override iterm", map[string]string{"WEEB_COVER": "iterm2"}, NativeITerm2},
+		{"override blocks wins", map[string]string{"WEEB_COVER": "blocks", "KITTY_WINDOW_ID": "1"}, NativeNone},
 	}
 	for _, tc := range cases {
 		clear()
@@ -318,5 +326,107 @@ func TestQuadrantGlyphs(t *testing.T) {
 	}
 	if !strings.Contains(out, "\x1b[48;2;10;20;30m ") {
 		t.Fatalf("flat block = %q", out)
+	}
+}
+
+func TestRenderNativeTmuxPassthrough(t *testing.T) {
+	var requests int32
+	server := imageServer(t, &requests)
+	t.Setenv("TMUX", "/tmp/tmux-501/default,123,0")
+	t.Setenv("WEEB_COVER", "")
+	r := New()
+	r.SetNative(NativeKitty)
+
+	out, err := r.RenderNative(context.Background(), server.URL, 4, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out, "\x1bPtmux;") || !strings.HasSuffix(out, "\x1b\\") {
+		t.Fatalf("not wrapped for tmux: %q", out[:min(len(out), 40)])
+	}
+	if !strings.Contains(out, "\x1b\x1b_G") {
+		t.Fatal("inner ESC not doubled")
+	}
+
+	// iTerm2 gets the same wrapper.
+	r.SetNative(NativeITerm2)
+	out, err = r.RenderNative(context.Background(), server.URL, 4, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out, "\x1bPtmux;") || !strings.Contains(out, "\x1b\x1b]1337;") {
+		t.Fatalf("iTerm2 not wrapped: %q", out[:min(len(out), 40)])
+	}
+}
+
+func TestClearNative(t *testing.T) {
+	t.Setenv("WEEB_COVER", "kitty")
+	t.Setenv("TMUX", "")
+	if got := ClearNative(); got != "\x1b_Ga=d,d=A\x1b\\" {
+		t.Errorf("clear = %q", got)
+	}
+
+	t.Setenv("TMUX", "/tmp/tmux")
+	if got := ClearNative(); !strings.HasPrefix(got, "\x1bPtmux;") || !strings.Contains(got, "\x1b\x1b_G") {
+		t.Errorf("tmux clear = %q", got)
+	}
+
+	t.Setenv("WEEB_COVER", "blocks")
+	if got := ClearNative(); got != "" {
+		t.Errorf("blocks clear = %q", got)
+	}
+
+	// A real iTerm2 session needs no delete command.
+	t.Setenv("WEEB_COVER", "iterm2")
+	if got := ClearNative(); got != "" {
+		t.Errorf("iterm2 clear = %q", got)
+	}
+}
+
+func TestRenderNativeShrinksLargeImages(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 2000, 3000))
+	for y := 0; y < 3000; y += 7 {
+		for x := 0; x < 2000; x += 7 {
+			img.SetRGBA(x, y, color.RGBA{uint8(x), uint8(y), 128, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	r := New()
+	r.SetNative(NativeKitty)
+	out, err := r.RenderNative(context.Background(), server.URL, 10, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload strings.Builder
+	for _, seq := range strings.Split(out, "\x1b\\") {
+		if i := strings.IndexByte(seq, ';'); i >= 0 {
+			payload.WriteString(seq[i+1:])
+		}
+	}
+	raw, err := base64.StdEncoding.DecodeString(payload.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 10x15 cells at 16x32 px per cell, not the original 2000x3000.
+	if cfg.Width != 160 || cfg.Height != 480 {
+		t.Fatalf("payload = %dx%d, want 160x480", cfg.Width, cfg.Height)
+	}
+	if len(out) >= len(data) {
+		t.Errorf("escape (%d bytes) is not smaller than the source (%d bytes)", len(out), len(data))
 	}
 }

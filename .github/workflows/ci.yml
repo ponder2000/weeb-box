@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # macOS runners ship a current Homebrew ffmpeg; the HLS download test needs
+    # 7.1+ for -extension_picky, which ubuntu-24.04's 6.1 rejects.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Ensure ffmpeg
+        run: command -v ffmpeg || brew install ffmpeg
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
