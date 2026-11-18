@@ -128,11 +128,11 @@ The table below is rewritten by [`.github/workflows/provider-live.yml`](.github/
 <!-- provider-status:start -->
 | Provider | Live check | Checked (UTC) |
 | --- | --- | --- |
-| `animekai` | ✅ working | 2026-11-17 |
-| `anizone` | ✅ working | 2026-11-17 |
-| `gogoanime` | ✅ working | 2026-11-17 |
-| `hianime` | ✅ working | 2026-11-17 |
-| `kissanime` | ✅ working | 2026-11-17 |
+| `animekai` | ✅ working | 2026-11-18 |
+| `anizone` | ✅ working | 2026-11-18 |
+| `gogoanime` | ✅ working | 2026-11-18 |
+| `hianime` | ✅ working | 2026-11-18 |
+| `kissanime` | ✅ working | 2026-11-18 |
 <!-- provider-status:end -->
 
 The MegaPlay resolver (data-id → encrypted sources → HLS + WebVTT) is shared by all providers in `internal/provider/megaplay`.
