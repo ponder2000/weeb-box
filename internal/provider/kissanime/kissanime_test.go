@@ -66,9 +66,16 @@ func TestParseEpisodesSortedAndDeduped(t *testing.T) {
 	}
 }
 
-// TestStreamChain covers episode page -> streaming.php -> megaplay -> AES -> m3u8
+// TestStreamChain covers episode page -> player iframe -> MegaPlay -> HLS
 // against a fake server, so the whole path runs without the live site.
 func TestStreamChain(t *testing.T) {
+	for _, playerPath := range []string{"/gogo-player.php?ep=1&type=sub", "/player/streaming.php?id=1"} {
+		t.Run(playerPath, func(t *testing.T) { testStreamChain(t, playerPath) })
+	}
+}
+
+func testStreamChain(t *testing.T, playerPath string) {
+	t.Helper()
 	var baseURL string
 	fail := func(w http.ResponseWriter, msg string) { http.Error(w, msg, http.StatusForbidden) }
 	mux := http.NewServeMux()
@@ -77,11 +84,11 @@ func TestStreamChain(t *testing.T) {
 		case "/anime/alpha/":
 			w.Write([]byte(`<a href="` + baseURL + `/anime/alpha/alpha-episode-1/">Alpha Episode 1</a>`))
 		case "/anime/alpha/alpha-episode-1/":
-			w.Write([]byte(`<iframe src="/player/streaming.php?id=1"></iframe>`))
-		case "/player/streaming.php":
+			w.Write([]byte(`<iframe src="` + strings.ReplaceAll(playerPath, "&", "&amp;") + `"></iframe>`))
+		case "/gogo-player.php", "/player/streaming.php":
 			w.Write([]byte(`<iframe src="/megaplay/stream/1/1/sub"></iframe>`))
 		case "/megaplay/stream/1/1/sub":
-			if r.Header.Get("Referer") != baseURL+"/player/streaming.php?id=1" {
+			if r.Header.Get("Referer") != baseURL+playerPath {
 				fail(w, "megaplay page needs player referer")
 				return
 			}

@@ -84,7 +84,7 @@ func (a *Adapter) Stream(ctx context.Context, episode provider.Episode) (provide
 	if err != nil {
 		return provider.Stream{}, err
 	}
-	playerURL, err := firstAttr(bytes.NewReader(page), `iframe[src*="streaming.php"]`, "src")
+	playerURL, err := firstAttr(bytes.NewReader(page), `iframe[src*="gogo-player.php"], iframe[src*="streaming.php"]`, "src")
 	if err != nil {
 		return provider.Stream{}, fmt.Errorf("episode player: %w", err)
 	}
