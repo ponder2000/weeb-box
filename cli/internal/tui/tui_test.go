@@ -505,6 +505,47 @@ func TestMouseClickSelectsPaintedListRow(t *testing.T) {
 	}
 }
 
+func TestMouseSkipsEpisodeFromPlayingScreen(t *testing.T) {
+	m := episodeFlowModel(t, nil)
+	m.player = &media.Player{Cmd: exec.Command("sh", "-c", "exit 0")}
+	m.playCancel = func() {}
+	m.playInfo = playbackInfo{Provider: "gogoanime", AnimeURL: "a", EpisodeURL: "e2", AnimeTitle: "A", EpisodeNumber: 2}
+	m.screen = screenPlaying
+	m.layout()
+
+	// Click the painted token/word, not the hit-test's own coordinates. A
+	// socket-less player makes Quit fail, proving the click routed to
+	// skipEpisode rather than being swallowed.
+	click := func(lineNeedle, clickNeedle string) string {
+		for y, row := range strings.Split(m.View(), "\n") {
+			base := strings.Index(row, lineNeedle)
+			if base < 0 {
+				continue
+			}
+			i := base + strings.Index(row[base:], clickNeedle)
+			if i < base {
+				t.Fatalf("missing %q after %q", clickNeedle, lineNeedle)
+			}
+			updated, _ := m.handleMouse(tea.MouseMsg{
+				X: lipgloss.Width(row[:i]), Y: y,
+				Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+			})
+			return updated.(Model).status
+		}
+		t.Fatalf("missing painted %q", lineNeedle)
+		return ""
+	}
+	if s := click("next E003", "next E003"); !strings.Contains(s, "Player:") {
+		t.Fatalf("click on next token: status=%q", s)
+	}
+	if s := click("prev / next", "prev"); !strings.Contains(s, "Player:") {
+		t.Fatalf("click on footer prev: status=%q", s)
+	}
+	if s := click("prev / next", "next"); !strings.Contains(s, "Player:") {
+		t.Fatalf("click on footer next: status=%q", s)
+	}
+}
+
 func TestLibraryShortcutAndMissingLocalFile(t *testing.T) {
 	m := New(nil, t.TempDir(), nil)
 	m.width, m.height = 80, 24

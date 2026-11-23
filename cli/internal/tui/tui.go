@@ -2507,6 +2507,8 @@ func (m Model) clickMouse(x, y int) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.ensurePreview())
 	case screenEpisodes:
 		return m.clickEpisodes(bx, by)
+	case screenPlaying:
+		return m.clickPlaying(bx, by)
 	case screenLibrary:
 		cmd := m.clickList(&m.main, by, 4, screenLibrary)
 		return m, cmd
@@ -2574,6 +2576,43 @@ func (m Model) clickHome(bx, by int) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.ensureHomeCover())
 	}
 	return m, cmd
+}
+
+// spanHit reports whether visual column bx lands inside a rendered needle.
+// The line may carry ANSI codes, so widths are visual, not bytes.
+func spanHit(line, needle string, bx int) bool {
+	i := strings.Index(line, needle)
+	if i < 0 {
+		return false
+	}
+	start := lipgloss.Width(line[:i])
+	return bx >= start && bx < start+lipgloss.Width(needle)
+}
+
+// clickPlaying routes the playing screen's two prev/next affordances: the
+// painted "next E%03d" (or "last episode") token in the Now-playing panel, and
+// the footer hint's prev / next words. Both behave exactly like [ and ].
+func (m Model) clickPlaying(bx, by int) (tea.Model, tea.Cmd) {
+	for y, line := range strings.Split(m.playingView(), "\n") {
+		if y != by {
+			continue
+		}
+		for _, needle := range []string{"next E", "last episode"} {
+			if spanHit(line, needle, bx) {
+				return m.skipEpisode(media.ExitNext)
+			}
+		}
+	}
+	if by == m.height-2-m.bodyOffset() {
+		line := m.footer()
+		if spanHit(line, "prev", bx) {
+			return m.skipEpisode(media.ExitPrev)
+		}
+		if spanHit(line, "next", bx) {
+			return m.skipEpisode(media.ExitNext)
+		}
+	}
+	return m, nil
 }
 
 func (m *Model) clickList(target *list.Model, by, listStart int, on screen) tea.Cmd {
