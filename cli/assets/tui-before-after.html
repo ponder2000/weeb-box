@@ -1,0 +1,1026 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weeb Box — TUI before and after</title>
+<style>
+:root {
+  color-scheme: light;
+  --page:#eef1f7; --surface:#fff; --ink:#192131; --muted:#4f5c72;
+  --line:#c8d0df; --accent:#234cad; --soft:#e8eeff; --shadow:#13204314;
+  --term:#fff; --term-ink:#161616; --term-line:#d6d6d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page:#10141d; --surface:#191f2c; --ink:#f2f5ff; --muted:#b2bed5;
+    --line:#394458; --accent:#a8beff; --soft:#273653; --shadow:#0004;
+    --term:#161616; --term-ink:#f4f4f4; --term-line:#393939;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page:#10141d; --surface:#191f2c; --ink:#f2f5ff; --muted:#b2bed5;
+  --line:#394458; --accent:#a8beff; --soft:#273653; --shadow:#0004;
+  --term:#161616; --term-ink:#f4f4f4; --term-line:#393939;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--page); color:var(--ink); font:16px/1.5 system-ui,sans-serif; }
+main { width:min(100% - 2rem, 1540px); margin:auto; padding:2rem 0 3rem; }
+header, .toolbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; }
+.kicker, legend, .windowbar { font:600 .75rem/1.3 ui-monospace,monospace; letter-spacing:.09em; text-transform:uppercase; }
+.kicker { color:var(--accent); margin:0; }
+h1 { font-size:clamp(2.4rem, 6vw, 5.5rem); letter-spacing:-.07em; line-height:1; margin:.55rem 0 1rem; }
+h2, h3, p { margin:0; }
+h2 { font-size:1.15rem; }
+.lede { max-width:62ch; color:var(--muted); margin-bottom:1.75rem; }
+fieldset { display:flex; flex-wrap:wrap; gap:.25rem; margin:0; padding:.25rem; border:1px solid var(--line); border-radius:.75rem; }
+legend { padding:0 .4rem; color:var(--muted); }
+label { position:relative; cursor:pointer; }
+label input { position:absolute; opacity:0; }
+label span { display:block; padding:.35rem .65rem; border-radius:.45rem; color:var(--muted); font-size:.9rem; }
+label input:checked + span { color:var(--accent); background:var(--soft); font-weight:650; }
+label input:focus-visible + span, pre:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.toolbar { justify-content:space-between; align-items:end; margin-bottom:1rem; }
+#mode { color:var(--muted); font:.8rem ui-monospace,monospace; }
+.grid, .notes { display:grid; gap:1rem; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.card { overflow:hidden; min-width:0; background:var(--surface); border:1px solid var(--line); border-radius:1rem; box-shadow:0 10px 26px var(--shadow); }
+.caption { padding:1rem 1.15rem; }
+.caption p { color:var(--muted); font-size:.92rem; margin-top:.25rem; }
+.tag { color:var(--accent); margin-right:.5rem; font:600 .74rem ui-monospace,monospace; text-transform:uppercase; }
+.windowbar { padding:.6rem 1rem; border-block:1px solid var(--term-line); background:var(--term); color:var(--term-ink); }
+pre {
+  margin:0; padding:.8rem; overflow:auto; background:var(--term); color:var(--term-ink);
+  font:var(--term-font, 10px)/1.36 "IBM Plex Mono","SFMono-Regular",Menlo,Consolas,monospace;
+  font-variant-ligatures:none;
+}
+.notes { margin-top:1.35rem; grid-template-columns:repeat(3,minmax(0,1fr)); }
+.notes article { border-top:1px solid var(--line); padding:.8rem .15rem; }
+.notes h3 { font-size:.95rem; }
+.notes p, footer { color:var(--muted); font-size:.88rem; margin-top:.35rem; }
+footer { margin-top:1.2rem; }
+code { font-family:ui-monospace,monospace; }
+@media (max-width:1500px) { .grid { grid-template-columns:1fr; } pre { --term-font:12px; } }
+@media (max-width:660px) { .notes { grid-template-columns:1fr; gap:.15rem; } pre { --term-font:11px; } }
+</style>
+<main>
+  <header>
+    <p class="kicker">Weeb Box / Interface review</p>
+    <fieldset>
+      <legend>Theme</legend>
+      <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+      <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+      <label><input type="radio" name="theme" value="system" checked><span>System</span></label>
+    </fieldset>
+  </header>
+  <h1>Watch desk.</h1>
+  <p class="lede">The design study behind Weeb Box’s Watch Desk. Compare two earlier TUI layouts with the Lip Gloss prototype using the same sample watch history. These are static captures from before implementation.</p>
+  <div class="toolbar">
+    <fieldset>
+      <legend>Compare screen</legend>
+      <label><input type="radio" name="screen" value="home" checked><span>Home · Wide</span></label>
+      <label><input type="radio" name="screen" value="compact"><span>Home · Compact</span></label>
+      <label><input type="radio" name="screen" value="episodes"><span>Episodes · Wide</span></label>
+      <label><input type="radio" name="screen" value="episodes-compact"><span>Episodes · Compact</span></label>
+    </fieldset>
+    <fieldset>
+      <legend>Baseline</legend>
+      <label><input type="radio" name="baseline" value="after" checked><span>Previous</span></label>
+      <label><input type="radio" name="baseline" value="before"><span>Original</span></label>
+    </fieldset>
+    <p id="mode" role="status">120 × 40 cells</p>
+  </div>
+  <div class="grid">
+    <section class="card" aria-labelledby="before-title">
+      <div class="caption">
+        <h2 id="before-title"><span class="tag">01 / Baseline</span> <span id="before-label">Previous TUI</span></h2>
+        <p id="before-note">The previous dashboard gives history and recent searches similar weight.</p>
+      </div>
+      <div class="windowbar" aria-hidden="true">Terminal / baseline</div>
+      <pre id="before" tabindex="0" aria-label="Before: terminal capture">Open this page with JavaScript enabled to view the captures.</pre>
+    </section>
+    <section class="card" aria-labelledby="after-title">
+      <div class="caption">
+        <h2 id="after-title"><span class="tag">02 / Proposed</span> <span id="after-label">Continue Watching</span></h2>
+        <p id="after-note">One show takes the lead with its episode, timestamp, and a clear Resume action.</p>
+      </div>
+      <div class="windowbar" aria-hidden="true">Terminal / concept</div>
+      <pre id="after" tabindex="0" aria-label="Proposed design: terminal capture">Open this page with JavaScript enabled to view the captures.</pre>
+    </section>
+  </div>
+  <div class="notes">
+    <article><h3>One strong action</h3><p>A featured Continue Watching card on Home and a filled Resume button on Episodes make the next step obvious.</p></article>
+    <article><h3>Scan the catalog</h3><p>Episode numbers and states align, while a full-width highlight and marker show selection. At 80 columns, inline metadata replaces the inspector.</p></article>
+    <article><h3>Status without interruption</h3><p>The bottom bar pairs queue activity with shortcuts. The wide view uses illustrative half-block artwork to show where a cover would sit.</p></article>
+  </div>
+  <footer><code>go run .</code> opens the implemented Watch Desk TUI. Scroll a capture horizontally if it doesn’t fit.</footer>
+</main>
+<!-- Lip Gloss captures, converted from ANSI truecolor output. -->
+<style>
+.c0{color:#78a9ff;font-weight:700;}
+.c1{color:#8d8d8d;}
+.c2{background:#262626;}
+.c3{color:#8d8d8d;background:#262626;}
+.c4{color:#6f6f6f;}
+.c5{color:#78a9ff;}
+.c6{color:var(--term);background:var(--term-ink);}
+.c7{color:#383838;}
+.c8{color:#f3f3f3;}
+.c9{color:#979797;}
+.c10{color:#3c3c3c;}
+.c11{color:#f3f3f3;background:#262626;}
+.c12{color:#0043ce;font-weight:700;}
+.c13{color:#515151;}
+.c14{background:#e0e0e0;}
+.c15{color:#515151;background:#e0e0e0;}
+.c16{color:#0043ce;}
+.c17{color:#e0e0e0;}
+.c18{color:#161616;}
+.c19{color:#161616;background:#e0e0e0;}
+.c20{color:#41be65;}
+.c21{color:#198038;}
+.c22{color:#78a9ff;background:#262626;font-weight:700;}
+.c23{color:#78a9ff;background:#262626;}
+.c24{color:#0043ce;background:#e0e0e0;font-weight:700;}
+.c25{color:#0043ce;background:#e0e0e0;}
+.c26{color:#f3f3f3;font-weight:700;}
+.c27{color:#262626;background:#78a9ff;font-weight:700;}
+.c28{background:#78a9ff;}
+.c29{color:#161616;font-weight:700;}
+.c30{color:#e0e0e0;background:#0043ce;font-weight:700;}
+.c31{background:#0043ce;}
+.c32{color:#a5bdff;font-weight:700;}
+.c33{color:#aeb7cc;}
+.c34{background:#344976;}
+.c35{color:#f2f3fb;background:#344976;}
+.c36{color:#414b64;}
+.c37{color:#aeb7cc;background:#222a40;}
+.c38{background:#222a40;}
+.c39{color:#a5bdff;}
+.c40{color:#f2f3fb;font-weight:700;}
+.c41{background:#a5bdff;}
+.c42{color:#132044;background:#a5bdff;font-weight:700;}
+.c43{color:#f2f3fb;}
+.c44{color:#8ee3b2;}
+.c45{color:#234caa;font-weight:700;}
+.c46{color:#495776;}
+.c47{background:#dce7ff;}
+.c48{color:#17233f;background:#dce7ff;}
+.c49{color:#bdc7dd;}
+.c50{color:#495776;background:#edf1fb;}
+.c51{background:#edf1fb;}
+.c52{color:#234caa;}
+.c53{color:#17233f;font-weight:700;}
+.c54{background:#234caa;}
+.c55{color:#ffffff;background:#234caa;font-weight:700;}
+.c56{color:#17233f;}
+.c57{color:#11613c;}
+.c58{color:#ffe1a3;background:#202b54;}
+.c59{color:#202b54;background:#202b54;}
+.c60{color:#202b54;background:#ffe1a3;}
+.c61{color:#404675;background:#404675;}
+.c62{color:#ffe1a3;background:#404675;}
+.c63{color:#404675;background:#ffe1a3;}
+.c64{color:#ffe1a3;background:#ffe1a3;}
+.c65{color:#404675;background:#78658c;}
+.c66{color:#ffe1a3;background:#78658c;}
+.c67{color:#78658c;background:#78658c;}
+.c68{color:#78658c;background:#465777;}
+.c69{color:#ffe1a3;background:#465777;}
+.c70{color:#cf8797;background:#cf8797;}
+.c71{color:#cf8797;background:#465777;}
+.c72{color:#465777;background:#465777;}
+.c73{color:#cf8797;background:#ecad96;}
+.c74{color:#cf8797;background:#304663;}
+.c75{color:#f2f3fb;background:#344976;font-weight:700;}
+.c76{color:#ecad96;background:#465777;}
+.c77{color:#ecad96;background:#ecad96;}
+.c78{color:#304663;background:#304663;}
+.c79{color:#465777;background:#304663;}
+.c80{color:#304663;background:#203650;}
+.c81{color:#203650;background:#203650;}
+.c82{color:#465777;background:#203650;}
+.c83{color:#304663;background:#17283c;}
+.c84{color:#203650;background:#17283c;}
+.c85{color:#17283c;background:#17283c;}
+.c86{color:#17233f;background:#dce7ff;font-weight:700;}
+.c87{color:#202b54;background:#404675;}
+.c88{color:#78658c;background:#cf8797;}
+.c89{color:#ffe1a3;background:#cf8797;}
+</style>
+<template id="before-compact-dark">  <span class="c0">weeb-box</span>  <span class="c1">(developed by </span><span class="c1">@chotathanos</span><span class="c1">)</span>                     <span class="c2"> </span><span class="c3">3 providers</span><span class="c2"> </span> <span class="c2"> </span><span class="c3">v1</span><span class="c2"> </span>
+  <span class="c4">────────────────────────────────────────────────────────────────────────────</span>
+
+   <span class="c0">╦ ╦╔═╗╔═╗╔╗ ╔╦╗╔═╗═╗ ╦</span>
+   <span class="c0">║║║║╣ ║╣ ╠╩╗ ║║║ ║╔╩╦╝</span>
+   <span class="c0">╚╩╝╚═╝╚═╝╚═╝═╩╝╚═╝╩ ╚═</span>
+
+   <span class="c5">╭────────────────────────────────────────────────────────────────────────╮</span>
+   <span class="c5">│</span> <span class="c5">&gt; </span><span class="c6">s</span><span class="c4">earch anime…</span>                                                        <span class="c5">│</span>
+   <span class="c5">╰────────────────────────────────────────────────────────────────────────╯</span>
+
+   <span class="c7">╭─────────────────────────────────╮</span>  <span class="c7">╭─────────────────────────────────╮</span>
+   <span class="c7">│</span> <span class="c0">Continue watching</span>               <span class="c7">│</span>  <span class="c7">│</span> <span class="c0">Recent searches</span>                 <span class="c7">│</span>
+   <span class="c7">│</span> <span class="c5">▌ </span><span class="c5">Frieren: Beyond Journey’s End</span> <span class="c7">│</span>  <span class="c7">│</span> <span class="c5">▌ </span><span class="c5">Frieren            </span>  <span class="c1">  2m ago</span> <span class="c7">│</span>
+   <span class="c7">│</span>   <span class="c5">▰▰▱▱</span><span class="c1">  </span><span class="c5"> 58%</span><span class="c1">  </span><span class="c1">E007</span><span class="c1">  </span><span class="c1">7 eps</span>       <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">The Apothecary Dia…</span>  <span class="c1">  1h ago</span> <span class="c7">│</span>
+   <span class="c7">│</span>                                 <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Delicious in Dunge…</span>  <span class="c1">  2h ago</span> <span class="c7">│</span>
+   <span class="c7">│</span>                                 <span class="c7">│</span>  <span class="c7">│</span>                                 <span class="c7">│</span>
+   <span class="c7">│</span>   <span class="c9">•</span><span class="c10">•</span><span class="c10">•</span><span class="c10">•</span>                          <span class="c7">│</span>  <span class="c7">│</span>   <span class="c9">•</span><span class="c10">•</span>                            <span class="c7">│</span>
+   <span class="c7">╰─────────────────────────────────╯</span>  <span class="c7">╰─────────────────────────────────╯</span>
+
+   <span class="c1">library </span><span class="c8">14 files</span><span class="c1">  ·  </span><span class="c8">4.0 GB</span><span class="c1">  ·  </span><span class="c8">12 watched</span>
+
+
+  <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span> <span class="c1">search</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">tab</span><span class="c2"> </span> <span class="c1">history</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+b</span><span class="c2"> </span> <span class="c1">browse</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+o</span><span class="c2"> </span> <span class="c1">settings</span></template>
+<template id="before-compact-light">  <span class="c12">weeb-box</span>  <span class="c13">(developed by </span><span class="c13">@chotathanos</span><span class="c13">)</span>                     <span class="c14"> </span><span class="c15">3 providers</span><span class="c14"> </span> <span class="c14"> </span><span class="c15">v1</span><span class="c14"> </span>
+  <span class="c1">────────────────────────────────────────────────────────────────────────────</span>
+
+   <span class="c12">╦ ╦╔═╗╔═╗╔╗ ╔╦╗╔═╗═╗ ╦</span>
+   <span class="c12">║║║║╣ ║╣ ╠╩╗ ║║║ ║╔╩╦╝</span>
+   <span class="c12">╚╩╝╚═╝╚═╝╚═╝═╩╝╚═╝╩ ╚═</span>
+
+   <span class="c16">╭────────────────────────────────────────────────────────────────────────╮</span>
+   <span class="c16">│</span> <span class="c16">&gt; </span><span class="c6">s</span><span class="c1">earch anime…</span>                                                        <span class="c16">│</span>
+   <span class="c16">╰────────────────────────────────────────────────────────────────────────╯</span>
+
+   <span class="c17">╭─────────────────────────────────╮</span>  <span class="c17">╭─────────────────────────────────╮</span>
+   <span class="c17">│</span> <span class="c12">Continue watching</span>               <span class="c17">│</span>  <span class="c17">│</span> <span class="c12">Recent searches</span>                 <span class="c17">│</span>
+   <span class="c17">│</span> <span class="c16">▌ </span><span class="c16">Frieren: Beyond Journey’s End</span> <span class="c17">│</span>  <span class="c17">│</span> <span class="c16">▌ </span><span class="c16">Frieren            </span>  <span class="c13">  2m ago</span> <span class="c17">│</span>
+   <span class="c17">│</span>   <span class="c16">▰▰▱▱</span><span class="c13">  </span><span class="c16"> 58%</span><span class="c13">  </span><span class="c13">E007</span><span class="c13">  </span><span class="c13">7 eps</span>       <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">The Apothecary Dia…</span>  <span class="c13">  1h ago</span> <span class="c17">│</span>
+   <span class="c17">│</span>                                 <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Delicious in Dunge…</span>  <span class="c13">  2h ago</span> <span class="c17">│</span>
+   <span class="c17">│</span>                                 <span class="c17">│</span>  <span class="c17">│</span>                                 <span class="c17">│</span>
+   <span class="c17">│</span>   <span class="c9">•</span><span class="c10">•</span><span class="c10">•</span><span class="c10">•</span>                          <span class="c17">│</span>  <span class="c17">│</span>   <span class="c9">•</span><span class="c10">•</span>                            <span class="c17">│</span>
+   <span class="c17">╰─────────────────────────────────╯</span>  <span class="c17">╰─────────────────────────────────╯</span>
+
+   <span class="c13">library </span><span class="c18">14 files</span><span class="c13">  ·  </span><span class="c18">4.0 GB</span><span class="c13">  ·  </span><span class="c18">12 watched</span>
+
+
+  <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span> <span class="c13">search</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">tab</span><span class="c14"> </span> <span class="c13">history</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+b</span><span class="c14"> </span> <span class="c13">browse</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+o</span><span class="c14"> </span> <span class="c13">settings</span></template>
+<template id="before-episodes-dark">     <span class="c0">weeb-box</span>  <span class="c1">episodes</span>  <span class="c1">(developed by </span><span class="c1">@chotathanos</span><span class="c1">)</span>                                                <span class="c2"> </span><span class="c3">animekai</span><span class="c2"> </span> <span class="c2"> </span><span class="c3">v1</span><span class="c2"> </span>
+     <span class="c4">──────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+
+
+       <span class="c1">Home</span><span class="c4"> / </span><span class="c1">search</span><span class="c4"> / </span><span class="c8">Frieren: Beyond Journey’s End</span>
+
+       <span class="c5">╭─────────────────────────────────────────────────────────╮</span>  <span class="c7">╭───────────────────────────────────────────╮</span>
+       <span class="c5">│</span> <span class="c0">Episodes</span>                                                <span class="c5">│</span>  <span class="c7">│</span> <span class="c0">Episode</span>                                   <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c5">E001</span>                                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">EPISODE 007</span>                               <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c8">The Journey’s End</span><span class="c1"> · </span><span class="c20">done</span>                              <span class="c5">│</span>  <span class="c7">│</span> <span class="c8">Like a Fairy Tale</span>                         <span class="c7">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">Frieren: Beyond Journey’s End</span>             <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c5">E002</span>                                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">PG-13 · Adventure, Fantasy</span>                <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c8">It Didn’t Have to Be Magic…</span><span class="c1"> · </span><span class="c20">done</span>                    <span class="c5">│</span>  <span class="c7">│</span> <span class="c4">Magic · Journey · Elves</span>                   <span class="c7">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">24m per episode</span>                           <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c5">E003</span>                                                  <span class="c5">│</span>  <span class="c7">│</span>                                           <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c8">Killing Magic</span><span class="c1"> · </span><span class="c20">done</span>                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c4">Watch progress</span>                            <span class="c7">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">│</span> <span class="c0">███████████████████████</span><span class="c4">░░░░░░░░░░░░░░░░</span>   <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c5">E004</span>                                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">58% · resume at 14:00</span>                     <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c8">The Land Where Souls Rest</span><span class="c1"> · </span><span class="c20">done</span>                      <span class="c5">│</span>  <span class="c7">│</span>                                           <span class="c7">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span>  <span class="c8">Play online</span><span class="c1">        mpv · resume</span>  <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c5">E005</span>                                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c11">d</span><span class="c2"> </span>  <span class="c8">Download episode</span><span class="c1">       HLS</span>           <span class="c7">│</span>
+       <span class="c5">│</span>   <span class="c8">Phantoms of the Dead</span><span class="c1"> · </span><span class="c20">done</span>                           <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c11">a</span><span class="c2"> </span>  <span class="c8">Download from here</span><span class="c1">     to the end</span>    <span class="c7">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">╰───────────────────────────────────────────╯</span>
+       <span class="c5">│</span>   <span class="c5">E006</span>                                                  <span class="c5">│</span>
+       <span class="c5">│</span>   <span class="c8">The Hero of the Village</span><span class="c1"> · </span><span class="c20">done</span>                        <span class="c5">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>
+       <span class="c5">│</span> <span class="c5">▌ </span><span class="c5">E007</span>                                                  <span class="c5">│</span>
+       <span class="c5">│</span>   <span class="c8">Like a Fairy Tale</span><span class="c1"> · </span><span class="c5">58% watched</span>                       <span class="c5">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>
+       <span class="c5">│</span>   <span class="c5">E008</span>                                                  <span class="c5">│</span>
+       <span class="c5">│</span>   <span class="c8">Frieren the Slayer</span>                                    <span class="c5">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>
+       <span class="c5">│</span>                                                         <span class="c5">│</span>
+       <span class="c5">│</span>   <span class="c9">•</span><span class="c10">•</span>                                                    <span class="c5">│</span>
+       <span class="c5">╰─────────────────────────────────────────────────────────╯</span>
+
+
+
+     <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span> <span class="c1">play</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">d</span><span class="c2"> </span> <span class="c1">download</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">a</span><span class="c2"> </span> <span class="c1">rest</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">w</span><span class="c2"> </span> <span class="c1">watched</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">i</span><span class="c2"> </span> <span class="c1">cover</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">v</span><span class="c2"> </span> <span class="c1">queue</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+o</span><span class="c2"> </span> <span class="c1">settings</span></template>
+<template id="before-episodes-light">     <span class="c12">weeb-box</span>  <span class="c13">episodes</span>  <span class="c13">(developed by </span><span class="c13">@chotathanos</span><span class="c13">)</span>                                                <span class="c14"> </span><span class="c15">animekai</span><span class="c14"> </span> <span class="c14"> </span><span class="c15">v1</span><span class="c14"> </span>
+     <span class="c1">──────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+
+
+       <span class="c13">Home</span><span class="c1"> / </span><span class="c13">search</span><span class="c1"> / </span><span class="c18">Frieren: Beyond Journey’s End</span>
+
+       <span class="c16">╭─────────────────────────────────────────────────────────╮</span>  <span class="c17">╭───────────────────────────────────────────╮</span>
+       <span class="c16">│</span> <span class="c12">Episodes</span>                                                <span class="c16">│</span>  <span class="c17">│</span> <span class="c12">Episode</span>                                   <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c16">E001</span>                                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">EPISODE 007</span>                               <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c18">The Journey’s End</span><span class="c13"> · </span><span class="c21">done</span>                              <span class="c16">│</span>  <span class="c17">│</span> <span class="c18">Like a Fairy Tale</span>                         <span class="c17">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">Frieren: Beyond Journey’s End</span>             <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c16">E002</span>                                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">PG-13 · Adventure, Fantasy</span>                <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c18">It Didn’t Have to Be Magic…</span><span class="c13"> · </span><span class="c21">done</span>                    <span class="c16">│</span>  <span class="c17">│</span> <span class="c1">Magic · Journey · Elves</span>                   <span class="c17">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">24m per episode</span>                           <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c16">E003</span>                                                  <span class="c16">│</span>  <span class="c17">│</span>                                           <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c18">Killing Magic</span><span class="c13"> · </span><span class="c21">done</span>                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c1">Watch progress</span>                            <span class="c17">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">│</span> <span class="c12">███████████████████████</span><span class="c1">░░░░░░░░░░░░░░░░</span>   <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c16">E004</span>                                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">58% · resume at 14:00</span>                     <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c18">The Land Where Souls Rest</span><span class="c13"> · </span><span class="c21">done</span>                      <span class="c16">│</span>  <span class="c17">│</span>                                           <span class="c17">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span>  <span class="c18">Play online</span><span class="c13">        mpv · resume</span>  <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c16">E005</span>                                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c19">d</span><span class="c14"> </span>  <span class="c18">Download episode</span><span class="c13">       HLS</span>           <span class="c17">│</span>
+       <span class="c16">│</span>   <span class="c18">Phantoms of the Dead</span><span class="c13"> · </span><span class="c21">done</span>                           <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c19">a</span><span class="c14"> </span>  <span class="c18">Download from here</span><span class="c13">     to the end</span>    <span class="c17">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">╰───────────────────────────────────────────╯</span>
+       <span class="c16">│</span>   <span class="c16">E006</span>                                                  <span class="c16">│</span>
+       <span class="c16">│</span>   <span class="c18">The Hero of the Village</span><span class="c13"> · </span><span class="c21">done</span>                        <span class="c16">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>
+       <span class="c16">│</span> <span class="c16">▌ </span><span class="c16">E007</span>                                                  <span class="c16">│</span>
+       <span class="c16">│</span>   <span class="c18">Like a Fairy Tale</span><span class="c13"> · </span><span class="c16">58% watched</span>                       <span class="c16">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>
+       <span class="c16">│</span>   <span class="c16">E008</span>                                                  <span class="c16">│</span>
+       <span class="c16">│</span>   <span class="c18">Frieren the Slayer</span>                                    <span class="c16">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>
+       <span class="c16">│</span>                                                         <span class="c16">│</span>
+       <span class="c16">│</span>   <span class="c9">•</span><span class="c10">•</span>                                                    <span class="c16">│</span>
+       <span class="c16">╰─────────────────────────────────────────────────────────╯</span>
+
+
+
+     <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span> <span class="c13">play</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">d</span><span class="c14"> </span> <span class="c13">download</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">a</span><span class="c14"> </span> <span class="c13">rest</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">w</span><span class="c14"> </span> <span class="c13">watched</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">i</span><span class="c14"> </span> <span class="c13">cover</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">v</span><span class="c14"> </span> <span class="c13">queue</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+o</span><span class="c14"> </span> <span class="c13">settings</span></template>
+<template id="before-episodes-compact-dark">  <span class="c0">weeb-box</span>  <span class="c1">episodes</span>  <span class="c1">(developed by </span><span class="c1">@chotathanos</span><span class="c1">)</span>              <span class="c2"> </span><span class="c3">animekai</span><span class="c2"> </span> <span class="c2"> </span><span class="c3">v1</span><span class="c2"> </span>
+  <span class="c4">────────────────────────────────────────────────────────────────────────────</span>
+
+    <span class="c1">Home</span><span class="c4"> / </span><span class="c1">search</span><span class="c4"> / </span><span class="c8">Frieren: Beyond Journey’s End</span>
+
+    <span class="c5">╭──────────────────────────────────────╮</span>  <span class="c7">╭────────────────────────────╮</span>
+    <span class="c5">│</span> <span class="c0">Episodes</span>                             <span class="c5">│</span>  <span class="c7">│</span> <span class="c0">Episode</span>                    <span class="c7">│</span>
+    <span class="c5">│</span> <span class="c5">▌ </span><span class="c5">E007</span>                               <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">EPISODE 007</span>                <span class="c7">│</span>
+    <span class="c5">│</span>   <span class="c8">Like a Fairy Tale</span><span class="c1"> · </span><span class="c5">58% watched</span>    <span class="c5">│</span>  <span class="c7">│</span> <span class="c8">Like a Fairy Tale</span>          <span class="c7">│</span>
+    <span class="c5">│</span>                                      <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">Frieren: Beyond Journey’s </span> <span class="c7">│</span>
+    <span class="c5">│</span>   <span class="c5">E008</span>                               <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">PG-13 · Adventure, Fantasy</span> <span class="c7">│</span>
+    <span class="c5">│</span>   <span class="c8">Frieren the Slayer</span>                 <span class="c5">│</span>  <span class="c7">│</span> <span class="c4">Magic · Journey · Elves</span>    <span class="c7">│</span>
+    <span class="c5">│</span>                                      <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">24m per episode</span>            <span class="c7">│</span>
+    <span class="c5">│</span>   <span class="c5">E009</span>                               <span class="c5">│</span>  <span class="c7">│</span>                            <span class="c7">│</span>
+    <span class="c5">│</span>   <span class="c8">Aura the Guillotine</span>                <span class="c5">│</span>  <span class="c7">│</span> <span class="c4">Watch progress</span>             <span class="c7">│</span>
+    <span class="c5">│</span>                                      <span class="c5">│</span>  <span class="c7">│</span> <span class="c0">██████████████</span><span class="c4">░░░░░░░░░░</span>   <span class="c7">│</span>
+    <span class="c5">│</span>                                      <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">58% · resume at 14:00</span>      <span class="c7">│</span>
+    <span class="c5">│</span>   <span class="c10">•</span><span class="c10">•</span><span class="c9">•</span>                                <span class="c5">│</span>  <span class="c7">│</span>                            <span class="c7">│</span>
+    <span class="c5">╰──────────────────────────────────────╯</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span>  <span class="c8">Play online</span>       <span class="c7">│</span>
+                                              <span class="c7">│</span> <span class="c2"> </span><span class="c11">d</span><span class="c2"> </span>  <span class="c8">Download episode</span>      <span class="c7">│</span>
+                                              <span class="c7">│</span> <span class="c2"> </span><span class="c11">a</span><span class="c2"> </span>  <span class="c8">Download from here</span>    <span class="c7">│</span>
+                                              <span class="c7">╰────────────────────────────╯</span>
+
+  <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span> <span class="c1">play</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">d</span><span class="c2"> </span> <span class="c1">download</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">a</span><span class="c2"> </span> <span class="c1">rest</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+o</span><span class="c2"> </span> <span class="c1">settings</span></template>
+<template id="before-episodes-compact-light">  <span class="c12">weeb-box</span>  <span class="c13">episodes</span>  <span class="c13">(developed by </span><span class="c13">@chotathanos</span><span class="c13">)</span>              <span class="c14"> </span><span class="c15">animekai</span><span class="c14"> </span> <span class="c14"> </span><span class="c15">v1</span><span class="c14"> </span>
+  <span class="c1">────────────────────────────────────────────────────────────────────────────</span>
+
+    <span class="c13">Home</span><span class="c1"> / </span><span class="c13">search</span><span class="c1"> / </span><span class="c18">Frieren: Beyond Journey’s End</span>
+
+    <span class="c16">╭──────────────────────────────────────╮</span>  <span class="c17">╭────────────────────────────╮</span>
+    <span class="c16">│</span> <span class="c12">Episodes</span>                             <span class="c16">│</span>  <span class="c17">│</span> <span class="c12">Episode</span>                    <span class="c17">│</span>
+    <span class="c16">│</span> <span class="c16">▌ </span><span class="c16">E007</span>                               <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">EPISODE 007</span>                <span class="c17">│</span>
+    <span class="c16">│</span>   <span class="c18">Like a Fairy Tale</span><span class="c13"> · </span><span class="c16">58% watched</span>    <span class="c16">│</span>  <span class="c17">│</span> <span class="c18">Like a Fairy Tale</span>          <span class="c17">│</span>
+    <span class="c16">│</span>                                      <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">Frieren: Beyond Journey’s </span> <span class="c17">│</span>
+    <span class="c16">│</span>   <span class="c16">E008</span>                               <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">PG-13 · Adventure, Fantasy</span> <span class="c17">│</span>
+    <span class="c16">│</span>   <span class="c18">Frieren the Slayer</span>                 <span class="c16">│</span>  <span class="c17">│</span> <span class="c1">Magic · Journey · Elves</span>    <span class="c17">│</span>
+    <span class="c16">│</span>                                      <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">24m per episode</span>            <span class="c17">│</span>
+    <span class="c16">│</span>   <span class="c16">E009</span>                               <span class="c16">│</span>  <span class="c17">│</span>                            <span class="c17">│</span>
+    <span class="c16">│</span>   <span class="c18">Aura the Guillotine</span>                <span class="c16">│</span>  <span class="c17">│</span> <span class="c1">Watch progress</span>             <span class="c17">│</span>
+    <span class="c16">│</span>                                      <span class="c16">│</span>  <span class="c17">│</span> <span class="c12">██████████████</span><span class="c1">░░░░░░░░░░</span>   <span class="c17">│</span>
+    <span class="c16">│</span>                                      <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">58% · resume at 14:00</span>      <span class="c17">│</span>
+    <span class="c16">│</span>   <span class="c10">•</span><span class="c10">•</span><span class="c9">•</span>                                <span class="c16">│</span>  <span class="c17">│</span>                            <span class="c17">│</span>
+    <span class="c16">╰──────────────────────────────────────╯</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span>  <span class="c18">Play online</span>       <span class="c17">│</span>
+                                              <span class="c17">│</span> <span class="c14"> </span><span class="c19">d</span><span class="c14"> </span>  <span class="c18">Download episode</span>      <span class="c17">│</span>
+                                              <span class="c17">│</span> <span class="c14"> </span><span class="c19">a</span><span class="c14"> </span>  <span class="c18">Download from here</span>    <span class="c17">│</span>
+                                              <span class="c17">╰────────────────────────────╯</span>
+
+  <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span> <span class="c13">play</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">d</span><span class="c14"> </span> <span class="c13">download</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">a</span><span class="c14"> </span> <span class="c13">rest</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+o</span><span class="c14"> </span> <span class="c13">settings</span></template>
+<template id="before-home-dark">     <span class="c0">weeb-box</span>  <span class="c1">(developed by </span><span class="c1">@chotathanos</span><span class="c1">)</span>                                                       <span class="c2"> </span><span class="c3">3 providers</span><span class="c2"> </span> <span class="c2"> </span><span class="c3">v1</span><span class="c2"> </span>
+     <span class="c4">──────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+
+      <span class="c0">╦ ╦╔═╗╔═╗╔╗ ╔╦╗╔═╗═╗ ╦</span>
+      <span class="c0">║║║║╣ ║╣ ╠╩╗ ║║║ ║╔╩╦╝</span>
+      <span class="c0">╚╩╝╚═╝╚═╝╚═╝═╩╝╚═╝╩ ╚═</span>
+      <span class="c1">anime, without the pop-ups</span><span class="c4">  ·  search / stream / download / library</span>
+
+      <span class="c5">╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+      <span class="c5">│</span> <span class="c5">&gt; </span><span class="c6">s</span><span class="c4">earch anime…</span>                                                                                          <span class="c5">│</span>
+      <span class="c5">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
+
+      <span class="c7">╭──────────────────────────────────────────────────╮</span>  <span class="c7">╭──────────────────────────────────────────────────╮</span>
+      <span class="c7">│</span> <span class="c0">Continue watching</span>                                <span class="c7">│</span>  <span class="c7">│</span> <span class="c0">Recent searches</span>                                  <span class="c7">│</span>
+      <span class="c7">│</span> <span class="c5">▌ </span><span class="c5">Frieren: Beyond Journey’s End</span>                  <span class="c7">│</span>  <span class="c7">│</span> <span class="c5">▌ </span><span class="c5">Frieren                             </span>  <span class="c1">  2m ago</span> <span class="c7">│</span>
+      <span class="c7">│</span>   <span class="c5">▰▰▱▱</span><span class="c1">  </span><span class="c5"> 58%</span><span class="c1">  </span><span class="c1">E007</span><span class="c1">  </span><span class="c1">7 eps</span>                        <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">The Apothecary Diaries              </span>  <span class="c1">  1h ago</span> <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Delicious in Dungeon                </span>  <span class="c1">  2h ago</span> <span class="c7">│</span>
+      <span class="c7">│</span>   <span class="c8">The Apothecary Diaries</span>                         <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Skip and Loafer                     </span>  <span class="c1">  1d ago</span> <span class="c7">│</span>
+      <span class="c7">│</span>   <span class="c5">▰▱▱▱</span><span class="c1">  </span><span class="c5"> 33%</span><span class="c1">  </span><span class="c1">E004</span><span class="c1">  </span><span class="c1">4 eps</span>                        <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Mob Psycho 100                      </span>  <span class="c1">  2d ago</span> <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>   <span class="c8">Delicious in Dungeon</span>                           <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>   <span class="c20">▰▰▰▰</span><span class="c1">  </span><span class="c20">done</span><span class="c1">  </span><span class="c1">E003</span><span class="c1">  </span><span class="c1">3 eps</span>                        <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>   <span class="c8">Skip and Loafer</span>                                <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>   <span class="c5">▰▱▱▱</span><span class="c1">  </span><span class="c5"> 12%</span><span class="c1">  </span><span class="c1">E002</span><span class="c1">  </span><span class="c1">2 eps</span>                        <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+      <span class="c7">╰──────────────────────────────────────────────────╯</span>  <span class="c7">╰──────────────────────────────────────────────────╯</span>
+
+      <span class="c1">library </span><span class="c8">14 files</span><span class="c1">  ·  </span><span class="c8">4.0 GB</span><span class="c1">  ·  </span><span class="c8">12 watched</span>
+
+
+     <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span> <span class="c1">search</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">tab</span><span class="c2"> </span> <span class="c1">history</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+b</span><span class="c2"> </span> <span class="c1">browse</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+l</span><span class="c2"> </span> <span class="c1">library</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+o</span><span class="c2"> </span> <span class="c1">settings</span></template>
+<template id="before-home-light">     <span class="c12">weeb-box</span>  <span class="c13">(developed by </span><span class="c13">@chotathanos</span><span class="c13">)</span>                                                       <span class="c14"> </span><span class="c15">3 providers</span><span class="c14"> </span> <span class="c14"> </span><span class="c15">v1</span><span class="c14"> </span>
+     <span class="c1">──────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+
+      <span class="c12">╦ ╦╔═╗╔═╗╔╗ ╔╦╗╔═╗═╗ ╦</span>
+      <span class="c12">║║║║╣ ║╣ ╠╩╗ ║║║ ║╔╩╦╝</span>
+      <span class="c12">╚╩╝╚═╝╚═╝╚═╝═╩╝╚═╝╩ ╚═</span>
+      <span class="c13">anime, without the pop-ups</span><span class="c1">  ·  search / stream / download / library</span>
+
+      <span class="c16">╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+      <span class="c16">│</span> <span class="c16">&gt; </span><span class="c6">s</span><span class="c1">earch anime…</span>                                                                                          <span class="c16">│</span>
+      <span class="c16">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
+
+      <span class="c17">╭──────────────────────────────────────────────────╮</span>  <span class="c17">╭──────────────────────────────────────────────────╮</span>
+      <span class="c17">│</span> <span class="c12">Continue watching</span>                                <span class="c17">│</span>  <span class="c17">│</span> <span class="c12">Recent searches</span>                                  <span class="c17">│</span>
+      <span class="c17">│</span> <span class="c16">▌ </span><span class="c16">Frieren: Beyond Journey’s End</span>                  <span class="c17">│</span>  <span class="c17">│</span> <span class="c16">▌ </span><span class="c16">Frieren                             </span>  <span class="c13">  2m ago</span> <span class="c17">│</span>
+      <span class="c17">│</span>   <span class="c16">▰▰▱▱</span><span class="c13">  </span><span class="c16"> 58%</span><span class="c13">  </span><span class="c13">E007</span><span class="c13">  </span><span class="c13">7 eps</span>                        <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">The Apothecary Diaries              </span>  <span class="c13">  1h ago</span> <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Delicious in Dungeon                </span>  <span class="c13">  2h ago</span> <span class="c17">│</span>
+      <span class="c17">│</span>   <span class="c18">The Apothecary Diaries</span>                         <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Skip and Loafer                     </span>  <span class="c13">  1d ago</span> <span class="c17">│</span>
+      <span class="c17">│</span>   <span class="c16">▰▱▱▱</span><span class="c13">  </span><span class="c16"> 33%</span><span class="c13">  </span><span class="c13">E004</span><span class="c13">  </span><span class="c13">4 eps</span>                        <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Mob Psycho 100                      </span>  <span class="c13">  2d ago</span> <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>   <span class="c18">Delicious in Dungeon</span>                           <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>   <span class="c21">▰▰▰▰</span><span class="c13">  </span><span class="c21">done</span><span class="c13">  </span><span class="c13">E003</span><span class="c13">  </span><span class="c13">3 eps</span>                        <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>   <span class="c18">Skip and Loafer</span>                                <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>   <span class="c16">▰▱▱▱</span><span class="c13">  </span><span class="c16"> 12%</span><span class="c13">  </span><span class="c13">E002</span><span class="c13">  </span><span class="c13">2 eps</span>                        <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+      <span class="c17">╰──────────────────────────────────────────────────╯</span>  <span class="c17">╰──────────────────────────────────────────────────╯</span>
+
+      <span class="c13">library </span><span class="c18">14 files</span><span class="c13">  ·  </span><span class="c18">4.0 GB</span><span class="c13">  ·  </span><span class="c18">12 watched</span>
+
+
+     <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span> <span class="c13">search</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">tab</span><span class="c14"> </span> <span class="c13">history</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+b</span><span class="c14"> </span> <span class="c13">browse</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+l</span><span class="c14"> </span> <span class="c13">library</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+o</span><span class="c14"> </span> <span class="c13">settings</span></template>
+<template id="after-compact-dark">  <span class="c0">weeb-box</span>  <span class="c1">(developed by </span><span class="c1">@chotathanos</span><span class="c1">)</span>                          <span class="c2"> </span><span class="c3">3 providers</span><span class="c2"> </span>
+  <span class="c22">[Home]</span> <span class="c1"> Browse </span> <span class="c1"> Library </span> <span class="c1"> Queue </span> <span class="c1"> Providers </span> <span class="c1"> Stats </span> <span class="c1"> Settings </span>
+
+  <span class="c0">Watch dashboard</span>
+  <span class="c2"> </span><span class="c3">14 files</span><span class="c2"> </span> <span class="c2"> </span><span class="c3">4.0 GB on disk</span><span class="c2"> </span> <span class="c2"> </span><span class="c3">12 watched</span><span class="c2"> </span>
+
+  <span class="c5">╭────────────────────────────────────────────────────────────────────────╮</span>
+  <span class="c5">│</span><span class="c2"> </span><span class="c23">› </span><span class="c6">S</span><span class="c4">earch anime across your providers…</span><span class="c2"> </span><span class="c2">                                 </span><span class="c5">│</span>
+  <span class="c5">╰────────────────────────────────────────────────────────────────────────╯</span>
+
+  <span class="c7">╭─────────────────────────────────╮</span>  <span class="c7">╭─────────────────────────────────╮</span>
+  <span class="c7">│</span> <span class="c0">Continue watching</span>               <span class="c7">│</span>  <span class="c7">│</span> <span class="c0">Recent searches</span>                 <span class="c7">│</span>
+  <span class="c7">│</span> <span class="c5">▌ </span><span class="c5">Frieren: Beyond Journey’s End</span> <span class="c7">│</span>  <span class="c7">│</span> <span class="c5">▌ </span><span class="c5">Frieren            </span>  <span class="c1">  2m ago</span> <span class="c7">│</span>
+  <span class="c7">│</span>   <span class="c5">▰▰▱▱</span><span class="c1">  </span><span class="c5"> 58%</span><span class="c1">  </span><span class="c1">E007</span><span class="c1">  </span><span class="c1">7 eps</span>       <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">The Apothecary Dia…</span>  <span class="c1">  1h ago</span> <span class="c7">│</span>
+  <span class="c7">│</span>                                 <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Delicious in Dunge…</span>  <span class="c1">  2h ago</span> <span class="c7">│</span>
+  <span class="c7">│</span>   <span class="c8">The Apothecary Diaries</span>        <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Skip and Loafer    </span>  <span class="c1">  1d ago</span> <span class="c7">│</span>
+  <span class="c7">│</span>   <span class="c5">▰▱▱▱</span><span class="c1">  </span><span class="c5"> 33%</span><span class="c1">  </span><span class="c1">E004</span><span class="c1">  </span><span class="c1">4 eps</span>       <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Mob Psycho 100     </span>  <span class="c1">  2d ago</span> <span class="c7">│</span>
+  <span class="c7">│</span>                                 <span class="c7">│</span>  <span class="c7">│</span>                                 <span class="c7">│</span>
+  <span class="c7">│</span>                                 <span class="c7">│</span>  <span class="c7">│</span>                                 <span class="c7">│</span>
+  <span class="c7">│</span>   <span class="c9">•</span><span class="c10">•</span>                            <span class="c7">│</span>  <span class="c7">│</span>                                 <span class="c7">│</span>
+  <span class="c7">╰─────────────────────────────────╯</span>  <span class="c7">╰─────────────────────────────────╯</span>
+
+
+  <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span> <span class="c1">search</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">tab</span><span class="c2"> </span> <span class="c1">history</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+b</span><span class="c2"> </span> <span class="c1">browse</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+o</span><span class="c2"> </span> <span class="c1">settings</span></template>
+<template id="after-compact-light">  <span class="c12">weeb-box</span>  <span class="c13">(developed by </span><span class="c13">@chotathanos</span><span class="c13">)</span>                          <span class="c14"> </span><span class="c15">3 providers</span><span class="c14"> </span>
+  <span class="c24">[Home]</span> <span class="c13"> Browse </span> <span class="c13"> Library </span> <span class="c13"> Queue </span> <span class="c13"> Providers </span> <span class="c13"> Stats </span> <span class="c13"> Settings </span>
+
+  <span class="c12">Watch dashboard</span>
+  <span class="c14"> </span><span class="c15">14 files</span><span class="c14"> </span> <span class="c14"> </span><span class="c15">4.0 GB on disk</span><span class="c14"> </span> <span class="c14"> </span><span class="c15">12 watched</span><span class="c14"> </span>
+
+  <span class="c16">╭────────────────────────────────────────────────────────────────────────╮</span>
+  <span class="c16">│</span><span class="c14"> </span><span class="c25">› </span><span class="c6">S</span><span class="c1">earch anime across your providers…</span><span class="c14"> </span><span class="c14">                                 </span><span class="c16">│</span>
+  <span class="c16">╰────────────────────────────────────────────────────────────────────────╯</span>
+
+  <span class="c17">╭─────────────────────────────────╮</span>  <span class="c17">╭─────────────────────────────────╮</span>
+  <span class="c17">│</span> <span class="c12">Continue watching</span>               <span class="c17">│</span>  <span class="c17">│</span> <span class="c12">Recent searches</span>                 <span class="c17">│</span>
+  <span class="c17">│</span> <span class="c16">▌ </span><span class="c16">Frieren: Beyond Journey’s End</span> <span class="c17">│</span>  <span class="c17">│</span> <span class="c16">▌ </span><span class="c16">Frieren            </span>  <span class="c13">  2m ago</span> <span class="c17">│</span>
+  <span class="c17">│</span>   <span class="c16">▰▰▱▱</span><span class="c13">  </span><span class="c16"> 58%</span><span class="c13">  </span><span class="c13">E007</span><span class="c13">  </span><span class="c13">7 eps</span>       <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">The Apothecary Dia…</span>  <span class="c13">  1h ago</span> <span class="c17">│</span>
+  <span class="c17">│</span>                                 <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Delicious in Dunge…</span>  <span class="c13">  2h ago</span> <span class="c17">│</span>
+  <span class="c17">│</span>   <span class="c18">The Apothecary Diaries</span>        <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Skip and Loafer    </span>  <span class="c13">  1d ago</span> <span class="c17">│</span>
+  <span class="c17">│</span>   <span class="c16">▰▱▱▱</span><span class="c13">  </span><span class="c16"> 33%</span><span class="c13">  </span><span class="c13">E004</span><span class="c13">  </span><span class="c13">4 eps</span>       <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Mob Psycho 100     </span>  <span class="c13">  2d ago</span> <span class="c17">│</span>
+  <span class="c17">│</span>                                 <span class="c17">│</span>  <span class="c17">│</span>                                 <span class="c17">│</span>
+  <span class="c17">│</span>                                 <span class="c17">│</span>  <span class="c17">│</span>                                 <span class="c17">│</span>
+  <span class="c17">│</span>   <span class="c9">•</span><span class="c10">•</span>                            <span class="c17">│</span>  <span class="c17">│</span>                                 <span class="c17">│</span>
+  <span class="c17">╰─────────────────────────────────╯</span>  <span class="c17">╰─────────────────────────────────╯</span>
+
+
+  <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span> <span class="c13">search</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">tab</span><span class="c14"> </span> <span class="c13">history</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+b</span><span class="c14"> </span> <span class="c13">browse</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+o</span><span class="c14"> </span> <span class="c13">settings</span></template>
+<template id="after-episodes-dark">     <span class="c0">weeb-box</span>  <span class="c1">episodes</span>  <span class="c1">(developed by </span><span class="c1">@chotathanos</span><span class="c1">)</span>                                                     <span class="c2"> </span><span class="c3">animekai</span><span class="c2"> </span>
+     <span class="c22">[Home]</span> <span class="c1"> Browse </span> <span class="c1"> Library </span> <span class="c1"> Queue </span> <span class="c1"> Providers </span> <span class="c1"> Stats </span> <span class="c1"> Settings </span>
+
+     <span class="c1">Home</span><span class="c4"> / </span><span class="c1">search</span><span class="c4"> / </span><span class="c8">Frieren: Beyond Journey’s End</span>
+
+     <span class="c5">╭─────────────────────────────────────────────────────────╮</span>  <span class="c7">╭───────────────────────────────────────────╮</span>
+     <span class="c5">│</span> <span class="c0">Episodes</span>                                                <span class="c5">│</span>  <span class="c7">│</span> <span class="c0">Episode</span>                                   <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c5">E001</span>                                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c3">EPISODE 007</span><span class="c2"> </span>                             <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c8">The Journey’s End</span><span class="c1"> · </span><span class="c20">done</span>                              <span class="c5">│</span>  <span class="c7">│</span> <span class="c26">Like a Fairy Tale</span>                         <span class="c7">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">│</span>                                           <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c5">E002</span>                                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c27"> ▶ Resume at 14:00  ↵</span><span class="c28">                    </span> <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c8">It Didn’t Have to Be Magic…</span><span class="c1"> · </span><span class="c20">done</span>                    <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c11">d</span><span class="c2"> </span> <span class="c1">Download episode</span>                      <span class="c7">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c11">a</span><span class="c2"> </span> <span class="c1">Download from here</span>                    <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c5">E003</span>                                                  <span class="c5">│</span>  <span class="c7">│</span>                                           <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c8">Killing Magic</span><span class="c1"> · </span><span class="c20">done</span>                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c0">████████████████████████</span><span class="c4">░░░░░░░░░░░░░░░░░</span> <span class="c7">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">14:00 / 24:00 · 58%</span>                       <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c5">E004</span>                                                  <span class="c5">│</span>  <span class="c7">│</span>                                           <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c8">The Land Where Souls Rest</span><span class="c1"> · </span><span class="c20">done</span>                      <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">PG-13 · Adventure, Fantasy</span>                <span class="c7">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>  <span class="c7">│</span> <span class="c4">Magic · Journey · Elves</span>                   <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c5">E005</span>                                                  <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">24m per episode</span>                           <span class="c7">│</span>
+     <span class="c5">│</span>   <span class="c8">Phantoms of the Dead</span><span class="c1"> · </span><span class="c20">done</span>                           <span class="c5">│</span>  <span class="c7">╰───────────────────────────────────────────╯</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>
+     <span class="c5">│</span>   <span class="c5">E006</span>                                                  <span class="c5">│</span>
+     <span class="c5">│</span>   <span class="c8">The Hero of the Village</span><span class="c1"> · </span><span class="c20">done</span>                        <span class="c5">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>
+     <span class="c5">│</span> <span class="c5">▌ </span><span class="c5">E007</span>                                                  <span class="c5">│</span>
+     <span class="c5">│</span>   <span class="c8">Like a Fairy Tale</span><span class="c1"> · </span><span class="c5">58% watched</span>                       <span class="c5">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>
+     <span class="c5">│</span>   <span class="c5">E008</span>                                                  <span class="c5">│</span>
+     <span class="c5">│</span>   <span class="c8">Frieren the Slayer</span>                                    <span class="c5">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>
+     <span class="c5">│</span>                                                         <span class="c5">│</span>
+     <span class="c5">│</span>   <span class="c9">•</span><span class="c10">•</span>                                                    <span class="c5">│</span>
+     <span class="c5">╰─────────────────────────────────────────────────────────╯</span>
+
+
+
+
+     <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span> <span class="c1">play</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">d</span><span class="c2"> </span> <span class="c1">download</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">a</span><span class="c2"> </span> <span class="c1">rest</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">w</span><span class="c2"> </span> <span class="c1">watched</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">i</span><span class="c2"> </span> <span class="c1">cover</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">v</span><span class="c2"> </span> <span class="c1">queue</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+o</span><span class="c2"> </span> <span class="c1">settings</span></template>
+<template id="after-episodes-light">     <span class="c12">weeb-box</span>  <span class="c13">episodes</span>  <span class="c13">(developed by </span><span class="c13">@chotathanos</span><span class="c13">)</span>                                                     <span class="c14"> </span><span class="c15">animekai</span><span class="c14"> </span>
+     <span class="c24">[Home]</span> <span class="c13"> Browse </span> <span class="c13"> Library </span> <span class="c13"> Queue </span> <span class="c13"> Providers </span> <span class="c13"> Stats </span> <span class="c13"> Settings </span>
+
+     <span class="c13">Home</span><span class="c1"> / </span><span class="c13">search</span><span class="c1"> / </span><span class="c18">Frieren: Beyond Journey’s End</span>
+
+     <span class="c16">╭─────────────────────────────────────────────────────────╮</span>  <span class="c17">╭───────────────────────────────────────────╮</span>
+     <span class="c16">│</span> <span class="c12">Episodes</span>                                                <span class="c16">│</span>  <span class="c17">│</span> <span class="c12">Episode</span>                                   <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c16">E001</span>                                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c15">EPISODE 007</span><span class="c14"> </span>                             <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c18">The Journey’s End</span><span class="c13"> · </span><span class="c21">done</span>                              <span class="c16">│</span>  <span class="c17">│</span> <span class="c29">Like a Fairy Tale</span>                         <span class="c17">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">│</span>                                           <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c16">E002</span>                                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c30"> ▶ Resume at 14:00  ↵</span><span class="c31">                    </span> <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c18">It Didn’t Have to Be Magic…</span><span class="c13"> · </span><span class="c21">done</span>                    <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c19">d</span><span class="c14"> </span> <span class="c13">Download episode</span>                      <span class="c17">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c19">a</span><span class="c14"> </span> <span class="c13">Download from here</span>                    <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c16">E003</span>                                                  <span class="c16">│</span>  <span class="c17">│</span>                                           <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c18">Killing Magic</span><span class="c13"> · </span><span class="c21">done</span>                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c12">████████████████████████</span><span class="c1">░░░░░░░░░░░░░░░░░</span> <span class="c17">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">14:00 / 24:00 · 58%</span>                       <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c16">E004</span>                                                  <span class="c16">│</span>  <span class="c17">│</span>                                           <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c18">The Land Where Souls Rest</span><span class="c13"> · </span><span class="c21">done</span>                      <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">PG-13 · Adventure, Fantasy</span>                <span class="c17">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>  <span class="c17">│</span> <span class="c1">Magic · Journey · Elves</span>                   <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c16">E005</span>                                                  <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">24m per episode</span>                           <span class="c17">│</span>
+     <span class="c16">│</span>   <span class="c18">Phantoms of the Dead</span><span class="c13"> · </span><span class="c21">done</span>                           <span class="c16">│</span>  <span class="c17">╰───────────────────────────────────────────╯</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>
+     <span class="c16">│</span>   <span class="c16">E006</span>                                                  <span class="c16">│</span>
+     <span class="c16">│</span>   <span class="c18">The Hero of the Village</span><span class="c13"> · </span><span class="c21">done</span>                        <span class="c16">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>
+     <span class="c16">│</span> <span class="c16">▌ </span><span class="c16">E007</span>                                                  <span class="c16">│</span>
+     <span class="c16">│</span>   <span class="c18">Like a Fairy Tale</span><span class="c13"> · </span><span class="c16">58% watched</span>                       <span class="c16">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>
+     <span class="c16">│</span>   <span class="c16">E008</span>                                                  <span class="c16">│</span>
+     <span class="c16">│</span>   <span class="c18">Frieren the Slayer</span>                                    <span class="c16">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>
+     <span class="c16">│</span>                                                         <span class="c16">│</span>
+     <span class="c16">│</span>   <span class="c9">•</span><span class="c10">•</span>                                                    <span class="c16">│</span>
+     <span class="c16">╰─────────────────────────────────────────────────────────╯</span>
+
+
+
+
+     <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span> <span class="c13">play</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">d</span><span class="c14"> </span> <span class="c13">download</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">a</span><span class="c14"> </span> <span class="c13">rest</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">w</span><span class="c14"> </span> <span class="c13">watched</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">i</span><span class="c14"> </span> <span class="c13">cover</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">v</span><span class="c14"> </span> <span class="c13">queue</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+o</span><span class="c14"> </span> <span class="c13">settings</span></template>
+<template id="after-episodes-compact-dark">  <span class="c0">weeb-box</span>  <span class="c1">episodes</span>  <span class="c1">(developed by </span><span class="c1">@chotathanos</span><span class="c1">)</span>                   <span class="c2"> </span><span class="c3">animekai</span><span class="c2"> </span>
+  <span class="c22">[Home]</span> <span class="c1"> Browse </span> <span class="c1"> Library </span> <span class="c1"> Queue </span> <span class="c1"> Providers </span> <span class="c1"> Stats </span> <span class="c1"> Settings </span>
+
+  <span class="c1">Home</span><span class="c4"> / </span><span class="c1">search</span><span class="c4"> / </span><span class="c8">Frieren: Beyond Journey’s End</span>
+
+  <span class="c5">╭──────────────────────────────────────╮</span>  <span class="c7">╭────────────────────────────╮</span>
+  <span class="c5">│</span> <span class="c0">Episodes</span>                             <span class="c5">│</span>  <span class="c7">│</span> <span class="c0">Episode</span>                    <span class="c7">│</span>
+  <span class="c5">│</span> <span class="c5">▌ </span><span class="c5">E007</span>                               <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c3">EPISODE 007</span><span class="c2"> </span>              <span class="c7">│</span>
+  <span class="c5">│</span>   <span class="c8">Like a Fairy Tale</span><span class="c1"> · </span><span class="c5">58% watched</span>    <span class="c5">│</span>  <span class="c7">│</span> <span class="c26">Like a Fairy Tale</span>          <span class="c7">│</span>
+  <span class="c5">│</span>                                      <span class="c5">│</span>  <span class="c7">│</span>                            <span class="c7">│</span>
+  <span class="c5">│</span>   <span class="c5">E008</span>                               <span class="c5">│</span>  <span class="c7">│</span> <span class="c27"> ▶ Resume at 14:00  ↵</span><span class="c28">     </span> <span class="c7">│</span>
+  <span class="c5">│</span>   <span class="c8">Frieren the Slayer</span>                 <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c11">d</span><span class="c2"> </span> <span class="c1">Download episode</span>       <span class="c7">│</span>
+  <span class="c5">│</span>                                      <span class="c5">│</span>  <span class="c7">│</span> <span class="c2"> </span><span class="c11">a</span><span class="c2"> </span> <span class="c1">Download from here</span>     <span class="c7">│</span>
+  <span class="c5">│</span>   <span class="c5">E009</span>                               <span class="c5">│</span>  <span class="c7">│</span>                            <span class="c7">│</span>
+  <span class="c5">│</span>   <span class="c8">Aura the Guillotine</span>                <span class="c5">│</span>  <span class="c7">│</span> <span class="c0">███████████████</span><span class="c4">░░░░░░░░░░░</span> <span class="c7">│</span>
+  <span class="c5">│</span>                                      <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">14:00 / 24:00 · 58%</span>        <span class="c7">│</span>
+  <span class="c5">│</span>                                      <span class="c5">│</span>  <span class="c7">│</span>                            <span class="c7">│</span>
+  <span class="c5">│</span>   <span class="c10">•</span><span class="c10">•</span><span class="c9">•</span>                                <span class="c5">│</span>  <span class="c7">│</span> <span class="c1">PG-13 · Adventure, Fantasy</span> <span class="c7">│</span>
+  <span class="c5">╰──────────────────────────────────────╯</span>  <span class="c7">│</span> <span class="c4">Magic · Journey · Elves</span>    <span class="c7">│</span>
+                                            <span class="c7">│</span> <span class="c1">24m per episode</span>            <span class="c7">│</span>
+                                            <span class="c7">╰────────────────────────────╯</span>
+
+
+  <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span> <span class="c1">play</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">d</span><span class="c2"> </span> <span class="c1">download</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">a</span><span class="c2"> </span> <span class="c1">rest</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+o</span><span class="c2"> </span> <span class="c1">settings</span></template>
+<template id="after-episodes-compact-light">  <span class="c12">weeb-box</span>  <span class="c13">episodes</span>  <span class="c13">(developed by </span><span class="c13">@chotathanos</span><span class="c13">)</span>                   <span class="c14"> </span><span class="c15">animekai</span><span class="c14"> </span>
+  <span class="c24">[Home]</span> <span class="c13"> Browse </span> <span class="c13"> Library </span> <span class="c13"> Queue </span> <span class="c13"> Providers </span> <span class="c13"> Stats </span> <span class="c13"> Settings </span>
+
+  <span class="c13">Home</span><span class="c1"> / </span><span class="c13">search</span><span class="c1"> / </span><span class="c18">Frieren: Beyond Journey’s End</span>
+
+  <span class="c16">╭──────────────────────────────────────╮</span>  <span class="c17">╭────────────────────────────╮</span>
+  <span class="c16">│</span> <span class="c12">Episodes</span>                             <span class="c16">│</span>  <span class="c17">│</span> <span class="c12">Episode</span>                    <span class="c17">│</span>
+  <span class="c16">│</span> <span class="c16">▌ </span><span class="c16">E007</span>                               <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c15">EPISODE 007</span><span class="c14"> </span>              <span class="c17">│</span>
+  <span class="c16">│</span>   <span class="c18">Like a Fairy Tale</span><span class="c13"> · </span><span class="c16">58% watched</span>    <span class="c16">│</span>  <span class="c17">│</span> <span class="c29">Like a Fairy Tale</span>          <span class="c17">│</span>
+  <span class="c16">│</span>                                      <span class="c16">│</span>  <span class="c17">│</span>                            <span class="c17">│</span>
+  <span class="c16">│</span>   <span class="c16">E008</span>                               <span class="c16">│</span>  <span class="c17">│</span> <span class="c30"> ▶ Resume at 14:00  ↵</span><span class="c31">     </span> <span class="c17">│</span>
+  <span class="c16">│</span>   <span class="c18">Frieren the Slayer</span>                 <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c19">d</span><span class="c14"> </span> <span class="c13">Download episode</span>       <span class="c17">│</span>
+  <span class="c16">│</span>                                      <span class="c16">│</span>  <span class="c17">│</span> <span class="c14"> </span><span class="c19">a</span><span class="c14"> </span> <span class="c13">Download from here</span>     <span class="c17">│</span>
+  <span class="c16">│</span>   <span class="c16">E009</span>                               <span class="c16">│</span>  <span class="c17">│</span>                            <span class="c17">│</span>
+  <span class="c16">│</span>   <span class="c18">Aura the Guillotine</span>                <span class="c16">│</span>  <span class="c17">│</span> <span class="c12">███████████████</span><span class="c1">░░░░░░░░░░░</span> <span class="c17">│</span>
+  <span class="c16">│</span>                                      <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">14:00 / 24:00 · 58%</span>        <span class="c17">│</span>
+  <span class="c16">│</span>                                      <span class="c16">│</span>  <span class="c17">│</span>                            <span class="c17">│</span>
+  <span class="c16">│</span>   <span class="c10">•</span><span class="c10">•</span><span class="c9">•</span>                                <span class="c16">│</span>  <span class="c17">│</span> <span class="c13">PG-13 · Adventure, Fantasy</span> <span class="c17">│</span>
+  <span class="c16">╰──────────────────────────────────────╯</span>  <span class="c17">│</span> <span class="c1">Magic · Journey · Elves</span>    <span class="c17">│</span>
+                                            <span class="c17">│</span> <span class="c13">24m per episode</span>            <span class="c17">│</span>
+                                            <span class="c17">╰────────────────────────────╯</span>
+
+
+  <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span> <span class="c13">play</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">d</span><span class="c14"> </span> <span class="c13">download</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">a</span><span class="c14"> </span> <span class="c13">rest</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+o</span><span class="c14"> </span> <span class="c13">settings</span></template>
+<template id="after-home-dark">     <span class="c0">weeb-box</span>  <span class="c1">(developed by </span><span class="c1">@chotathanos</span><span class="c1">)</span>                                                            <span class="c2"> </span><span class="c3">3 providers</span><span class="c2"> </span>
+     <span class="c22">[Home]</span> <span class="c1"> Browse </span> <span class="c1"> Library </span> <span class="c1"> Queue </span> <span class="c1"> Providers </span> <span class="c1"> Stats </span> <span class="c1"> Settings </span>
+
+     <span class="c0">Watch dashboard</span>
+     <span class="c2"> </span><span class="c3">14 files</span><span class="c2"> </span> <span class="c2"> </span><span class="c3">4.0 GB on disk</span><span class="c2"> </span> <span class="c2"> </span><span class="c3">12 watched</span><span class="c2"> </span>
+
+     <span class="c5">╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+     <span class="c5">│</span><span class="c2"> </span><span class="c23">› </span><span class="c6">S</span><span class="c4">earch anime across your providers…</span><span class="c2"> </span><span class="c2">                                                                   </span><span class="c5">│</span>
+     <span class="c5">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
+
+     <span class="c7">╭──────────────────────────────────────────────────╮</span>  <span class="c7">╭──────────────────────────────────────────────────╮</span>
+     <span class="c7">│</span> <span class="c0">Continue watching</span>                                <span class="c7">│</span>  <span class="c7">│</span> <span class="c0">Recent searches</span>                                  <span class="c7">│</span>
+     <span class="c7">│</span> <span class="c5">▌ </span><span class="c5">Frieren: Beyond Journey’s End</span>                  <span class="c7">│</span>  <span class="c7">│</span> <span class="c5">▌ </span><span class="c5">Frieren                             </span>  <span class="c1">  2m ago</span> <span class="c7">│</span>
+     <span class="c7">│</span>   <span class="c5">▰▰▱▱</span><span class="c1">  </span><span class="c5"> 58%</span><span class="c1">  </span><span class="c1">E007</span><span class="c1">  </span><span class="c1">7 eps</span>                        <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">The Apothecary Diaries              </span>  <span class="c1">  1h ago</span> <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Delicious in Dungeon                </span>  <span class="c1">  2h ago</span> <span class="c7">│</span>
+     <span class="c7">│</span>   <span class="c8">The Apothecary Diaries</span>                         <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Skip and Loafer                     </span>  <span class="c1">  1d ago</span> <span class="c7">│</span>
+     <span class="c7">│</span>   <span class="c5">▰▱▱▱</span><span class="c1">  </span><span class="c5"> 33%</span><span class="c1">  </span><span class="c1">E004</span><span class="c1">  </span><span class="c1">4 eps</span>                        <span class="c7">│</span>  <span class="c7">│</span>   <span class="c8">Mob Psycho 100                      </span>  <span class="c1">  2d ago</span> <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>   <span class="c8">Delicious in Dungeon</span>                           <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>   <span class="c20">▰▰▰▰</span><span class="c1">  </span><span class="c20">done</span><span class="c1">  </span><span class="c1">E003</span><span class="c1">  </span><span class="c1">3 eps</span>                        <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>   <span class="c8">Skip and Loafer</span>                                <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>   <span class="c5">▰▱▱▱</span><span class="c1">  </span><span class="c5"> 12%</span><span class="c1">  </span><span class="c1">E002</span><span class="c1">  </span><span class="c1">2 eps</span>                        <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">│</span>                                                  <span class="c7">│</span>  <span class="c7">│</span>                                                  <span class="c7">│</span>
+     <span class="c7">╰──────────────────────────────────────────────────╯</span>  <span class="c7">╰──────────────────────────────────────────────────╯</span>
+
+
+     <span class="c2"> </span><span class="c11">enter</span><span class="c2"> </span> <span class="c1">search</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">tab</span><span class="c2"> </span> <span class="c1">history</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+b</span><span class="c2"> </span> <span class="c1">browse</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+l</span><span class="c2"> </span> <span class="c1">library</span><span class="c1">  ·  </span><span class="c2"> </span><span class="c11">ctrl+o</span><span class="c2"> </span> <span class="c1">settings</span></template>
+<template id="after-home-light">     <span class="c12">weeb-box</span>  <span class="c13">(developed by </span><span class="c13">@chotathanos</span><span class="c13">)</span>                                                            <span class="c14"> </span><span class="c15">3 providers</span><span class="c14"> </span>
+     <span class="c24">[Home]</span> <span class="c13"> Browse </span> <span class="c13"> Library </span> <span class="c13"> Queue </span> <span class="c13"> Providers </span> <span class="c13"> Stats </span> <span class="c13"> Settings </span>
+
+     <span class="c12">Watch dashboard</span>
+     <span class="c14"> </span><span class="c15">14 files</span><span class="c14"> </span> <span class="c14"> </span><span class="c15">4.0 GB on disk</span><span class="c14"> </span> <span class="c14"> </span><span class="c15">12 watched</span><span class="c14"> </span>
+
+     <span class="c16">╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+     <span class="c16">│</span><span class="c14"> </span><span class="c25">› </span><span class="c6">S</span><span class="c1">earch anime across your providers…</span><span class="c14"> </span><span class="c14">                                                                   </span><span class="c16">│</span>
+     <span class="c16">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
+
+     <span class="c17">╭──────────────────────────────────────────────────╮</span>  <span class="c17">╭──────────────────────────────────────────────────╮</span>
+     <span class="c17">│</span> <span class="c12">Continue watching</span>                                <span class="c17">│</span>  <span class="c17">│</span> <span class="c12">Recent searches</span>                                  <span class="c17">│</span>
+     <span class="c17">│</span> <span class="c16">▌ </span><span class="c16">Frieren: Beyond Journey’s End</span>                  <span class="c17">│</span>  <span class="c17">│</span> <span class="c16">▌ </span><span class="c16">Frieren                             </span>  <span class="c13">  2m ago</span> <span class="c17">│</span>
+     <span class="c17">│</span>   <span class="c16">▰▰▱▱</span><span class="c13">  </span><span class="c16"> 58%</span><span class="c13">  </span><span class="c13">E007</span><span class="c13">  </span><span class="c13">7 eps</span>                        <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">The Apothecary Diaries              </span>  <span class="c13">  1h ago</span> <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Delicious in Dungeon                </span>  <span class="c13">  2h ago</span> <span class="c17">│</span>
+     <span class="c17">│</span>   <span class="c18">The Apothecary Diaries</span>                         <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Skip and Loafer                     </span>  <span class="c13">  1d ago</span> <span class="c17">│</span>
+     <span class="c17">│</span>   <span class="c16">▰▱▱▱</span><span class="c13">  </span><span class="c16"> 33%</span><span class="c13">  </span><span class="c13">E004</span><span class="c13">  </span><span class="c13">4 eps</span>                        <span class="c17">│</span>  <span class="c17">│</span>   <span class="c18">Mob Psycho 100                      </span>  <span class="c13">  2d ago</span> <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>   <span class="c18">Delicious in Dungeon</span>                           <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>   <span class="c21">▰▰▰▰</span><span class="c13">  </span><span class="c21">done</span><span class="c13">  </span><span class="c13">E003</span><span class="c13">  </span><span class="c13">3 eps</span>                        <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>   <span class="c18">Skip and Loafer</span>                                <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>   <span class="c16">▰▱▱▱</span><span class="c13">  </span><span class="c16"> 12%</span><span class="c13">  </span><span class="c13">E002</span><span class="c13">  </span><span class="c13">2 eps</span>                        <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">│</span>                                                  <span class="c17">│</span>  <span class="c17">│</span>                                                  <span class="c17">│</span>
+     <span class="c17">╰──────────────────────────────────────────────────╯</span>  <span class="c17">╰──────────────────────────────────────────────────╯</span>
+
+
+     <span class="c14"> </span><span class="c19">enter</span><span class="c14"> </span> <span class="c13">search</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">tab</span><span class="c14"> </span> <span class="c13">history</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+b</span><span class="c14"> </span> <span class="c13">browse</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+l</span><span class="c14"> </span> <span class="c13">library</span><span class="c13">  ·  </span><span class="c14"> </span><span class="c19">ctrl+o</span><span class="c14"> </span> <span class="c13">settings</span></template>
+<template id="concept-compact-dark">  <span class="c32">◆  WEEB BOX</span>  <span class="c33">/  WATCH DESK</span>                              <span class="c33">●  3 sources enabled</span>
+  <span class="c34"> </span><span class="c35">Home</span><span class="c34"> </span>  <span class="c33"> Browse </span>  <span class="c33"> Library </span>  <span class="c33"> Queue </span>  <span class="c33"> Providers </span>  <span class="c33"> Stats </span>  <span class="c33"> Settings </span>
+  <span class="c36">────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="c37">  /  Search across all providers…</span><span class="c38">                                           </span>
+
+  <span class="c39">╭──────────────────────────────────────────────────────────────────────────╮</span>
+  <span class="c39">│</span> <span class="c32">CONTINUE WATCHING</span>  <span class="c33">/  NEXT UP</span>                                            <span class="c39">│</span>
+  <span class="c39">│</span>                                                                          <span class="c39">│</span>
+  <span class="c39">│</span> <span class="c40">Frieren: Beyond Journey’s End</span>                                            <span class="c39">│</span>
+  <span class="c39">│</span> <span class="c33">E007  ·  Like a Fairy Tale</span>                                               <span class="c39">│</span>
+  <span class="c39">│</span>                                                                          <span class="c39">│</span>
+  <span class="c39">│</span> <span class="c39">━━━━━━━━━━━━━━━━━━</span><span class="c36">──────────────</span><span class="c33">  14:00 / 24:00</span>                          <span class="c39">│</span>
+  <span class="c39">│</span> <span class="c41"> </span><span class="c42">↵  Resume episode</span><span class="c41"> </span>                                                      <span class="c39">│</span>
+  <span class="c39">╰──────────────────────────────────────────────────────────────────────────╯</span>
+
+  <span class="c32">Watch history</span>                  <span class="c33">03 shows</span>    <span class="c32">Recent searches</span>        <span class="c33">05 queries</span>
+  <span class="c36">───────────────────────────────────────</span>    <span class="c36">─────────────────────────────────</span>
+  <span class="c43">The Apothecary Diaries</span>        <span class="c33">E004</span>  <span class="c33">33%</span>    <span class="c43">Frieren</span>                        <span class="c33">2m</span>
+  <span class="c43">Delicious in Dungeon</span>       <span class="c33">E003</span>  <span class="c44">✓ Done</span>    <span class="c43">The Apothecary Diaries</span>         <span class="c33">1h</span>
+  <span class="c43">Skip and Loafer</span>               <span class="c33">E002</span>  <span class="c33">13%</span>    <span class="c43">Delicious in Dungeon</span>           <span class="c33">2h</span>
+
+  <span class="c36">────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c44">● Ready</span><span class="c33">  ·  Queue idle</span>                          <span class="c33">↵ Resume   / Search   ? Help</span></template>
+<template id="concept-compact-light">  <span class="c45">◆  WEEB BOX</span>  <span class="c46">/  WATCH DESK</span>                              <span class="c46">●  3 sources enabled</span>
+  <span class="c47"> </span><span class="c48">Home</span><span class="c47"> </span>  <span class="c46"> Browse </span>  <span class="c46"> Library </span>  <span class="c46"> Queue </span>  <span class="c46"> Providers </span>  <span class="c46"> Stats </span>  <span class="c46"> Settings </span>
+  <span class="c49">────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="c50">  /  Search across all providers…</span><span class="c51">                                           </span>
+
+  <span class="c52">╭──────────────────────────────────────────────────────────────────────────╮</span>
+  <span class="c52">│</span> <span class="c45">CONTINUE WATCHING</span>  <span class="c46">/  NEXT UP</span>                                            <span class="c52">│</span>
+  <span class="c52">│</span>                                                                          <span class="c52">│</span>
+  <span class="c52">│</span> <span class="c53">Frieren: Beyond Journey’s End</span>                                            <span class="c52">│</span>
+  <span class="c52">│</span> <span class="c46">E007  ·  Like a Fairy Tale</span>                                               <span class="c52">│</span>
+  <span class="c52">│</span>                                                                          <span class="c52">│</span>
+  <span class="c52">│</span> <span class="c52">━━━━━━━━━━━━━━━━━━</span><span class="c49">──────────────</span><span class="c46">  14:00 / 24:00</span>                          <span class="c52">│</span>
+  <span class="c52">│</span> <span class="c54"> </span><span class="c55">↵  Resume episode</span><span class="c54"> </span>                                                      <span class="c52">│</span>
+  <span class="c52">╰──────────────────────────────────────────────────────────────────────────╯</span>
+
+  <span class="c45">Watch history</span>                  <span class="c46">03 shows</span>    <span class="c45">Recent searches</span>        <span class="c46">05 queries</span>
+  <span class="c49">───────────────────────────────────────</span>    <span class="c49">─────────────────────────────────</span>
+  <span class="c56">The Apothecary Diaries</span>        <span class="c46">E004</span>  <span class="c46">33%</span>    <span class="c56">Frieren</span>                        <span class="c46">2m</span>
+  <span class="c56">Delicious in Dungeon</span>       <span class="c46">E003</span>  <span class="c57">✓ Done</span>    <span class="c56">The Apothecary Diaries</span>         <span class="c46">1h</span>
+  <span class="c56">Skip and Loafer</span>               <span class="c46">E002</span>  <span class="c46">13%</span>    <span class="c56">Delicious in Dungeon</span>           <span class="c46">2h</span>
+
+  <span class="c49">────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c57">● Ready</span><span class="c46">  ·  Queue idle</span>                          <span class="c46">↵ Resume   / Search   ? Help</span></template>
+<template id="concept-episodes-dark">  <span class="c32">◆  WEEB BOX</span>  <span class="c33">/  WATCH DESK</span>                                                                      <span class="c33">●  3 sources enabled</span>
+  <span class="c34"> </span><span class="c35">Home</span><span class="c34"> </span>  <span class="c33"> Browse </span>  <span class="c33"> Library </span>  <span class="c33"> Queue </span>  <span class="c33"> Providers </span>  <span class="c33"> Stats </span>  <span class="c33"> Settings </span>
+  <span class="c36">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="c40">Frieren: Beyond Journey’s End</span>
+  <span class="c33">PG-13  ·  Adventure / Fantasy  ·  AnimeKai</span>
+
+  <span class="c32">Episode catalog</span>                                                      <span class="c33">09 episodes</span>    <span class="c32">Series inspector</span>              <span class="c33">TV</span>
+  <span class="c36">────────────────────────────────────────────────────────────────────────────────</span>    <span class="c36">────────────────────────────────</span>
+  <span class="c33">  NO.   EPISODE</span>                                                         <span class="c33">STATUS  </span>    <span class="c58">▀</span><span class="c59">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span>
+  <span class="c43">  E001  The Journey’s End</span>                                               <span class="c44">✓ Done</span>      <span class="c59">▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c60">▀</span><span class="c59">▀▀▀▀▀▀▀▀</span><span class="c58">▀</span><span class="c59">▀▀▀▀▀▀▀▀</span>
+  <span class="c43">  E002  It Didn’t Have to Be Magic…</span>                                     <span class="c44">✓ Done</span>      <span class="c61">▀▀▀▀▀</span><span class="c62">▀</span><span class="c61">▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c63">▀</span><span class="c64">▀▀▀▀</span><span class="c63">▀</span><span class="c61">▀▀▀▀▀▀</span>
+  <span class="c43">  E003  Killing Magic</span>                                                   <span class="c44">✓ Done</span>      <span class="c65">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c63">▀</span><span class="c64">▀▀▀▀▀▀</span><span class="c65">▀▀</span><span class="c66">▀</span><span class="c65">▀▀▀</span>
+  <span class="c43">  E004  The Land Where Souls Rest</span>                                       <span class="c44">✓ Done</span>      <span class="c67">▀▀▀▀▀▀▀▀</span><span class="c68">▀▀</span><span class="c66">▀</span><span class="c67">▀▀▀▀▀▀▀▀▀</span><span class="c64">▀</span><span class="c69">▀▀</span><span class="c64">▀▀▀</span><span class="c67">▀▀▀▀▀▀</span>
+  <span class="c43">  E005  Phantoms of the Dead</span>                                            <span class="c44">✓ Done</span>      <span class="c70">▀▀▀▀</span><span class="c71">▀</span><span class="c72">▀▀▀▀▀▀</span><span class="c70">▀▀▀▀▀▀▀▀▀</span><span class="c72">▀▀▀▀</span><span class="c69">▀</span><span class="c71">▀▀</span><span class="c70">▀▀▀▀▀</span>
+  <span class="c43">  E006  The Hero of the Village</span>                                         <span class="c44">✓ Done</span>      <span class="c73">▀▀▀</span><span class="c71">▀</span><span class="c72">▀▀▀▀▀▀▀▀</span><span class="c73">▀▀</span><span class="c74">▀</span><span class="c73">▀▀▀▀</span><span class="c72">▀▀▀▀▀▀▀▀▀</span><span class="c73">▀</span><span class="c74">▀▀</span><span class="c73">▀</span>
+  <span class="c75">▸ E007  Like a Fairy Tale                                                  58%  </span>    <span class="c76">▀</span><span class="c77">▀</span><span class="c76">▀</span><span class="c72">▀▀▀▀▀▀</span><span class="c78">▀▀</span><span class="c79">▀</span><span class="c78">▀▀▀</span><span class="c79">▀</span><span class="c72">▀▀▀▀▀▀▀▀▀</span><span class="c79">▀▀▀</span><span class="c78">▀▀▀</span><span class="c79">▀</span>
+  <span class="c43">  E008  Frieren the Slayer</span>                                            <span class="c33">Unplayed  </span>    <span class="c78">▀</span><span class="c72">▀▀▀</span><span class="c79">▀</span><span class="c72">▀▀▀</span><span class="c78">▀▀▀▀▀▀▀▀▀</span><span class="c79">▀▀▀</span><span class="c72">▀▀▀</span><span class="c79">▀</span><span class="c80">▀▀</span><span class="c78">▀▀▀▀▀▀</span>
+  <span class="c43">  E009  Aura the Guillotine</span>                                           <span class="c33">Unplayed  </span>    <span class="c81">▀▀▀▀▀</span><span class="c80">▀</span><span class="c78">▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c80">▀▀</span><span class="c82">▀▀</span><span class="c81">▀▀▀▀</span><span class="c80">▀▀▀▀</span><span class="c78">▀</span>
+                                                                                      <span class="c81">▀▀▀▀▀▀▀</span><span class="c80">▀▀▀</span><span class="c78">▀▀</span><span class="c83">▀▀▀▀▀</span><span class="c80">▀</span><span class="c81">▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c80">▀</span>
+                                                                                      <span class="c81">▀▀▀▀▀▀</span><span class="c84">▀▀▀</span><span class="c85">▀▀▀▀▀▀▀▀▀▀▀</span><span class="c84">▀▀▀</span><span class="c81">▀▀▀▀▀▀▀▀▀</span>
+  <span class="c32">E007  /  LIKE A FAIRY TALE</span>                                                          <span class="c84">▀▀▀</span><span class="c85">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c84">▀▀▀▀▀</span><span class="c85">▀</span>
+
+  <span class="c41"> </span><span class="c42">↵ Resume at 14:00</span><span class="c41"> </span>  <span class="c34"> </span><span class="c35">d Download</span><span class="c34"> </span>  <span class="c34"> </span><span class="c35">w Mark watched</span><span class="c34"> </span>                                 <span class="c40">Frieren: Beyond Journey’s End</span>
+  <span class="c39">━━━━━━━━━━━━━━━</span><span class="c36">───────────</span>  <span class="c33">58%  ·  14:00 / 24:00</span>                                   <span class="c34"> </span><span class="c35">PG-13</span><span class="c34"> </span>  <span class="c34"> </span><span class="c35">24 min</span><span class="c34"> </span>
+
+                                                                                      <span class="c33">Adventure  /  Fantasy</span>
+                                                                                      <span class="c33">Magic  ·  Journey  ·  Elves</span>
+
+                                                                                      <span class="c32">SOURCE</span>
+                                                                                      <span class="c43">AnimeKai</span>
+
+
+
+
+
+
+
+  <span class="c36">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c32">↓ E008</span><span class="c33">  64% · 8.2 MB/s</span>                                                  <span class="c33">↑↓ Select   ↵ Resume   d Download   esc Back</span></template>
+<template id="concept-episodes-light">  <span class="c45">◆  WEEB BOX</span>  <span class="c46">/  WATCH DESK</span>                                                                      <span class="c46">●  3 sources enabled</span>
+  <span class="c47"> </span><span class="c48">Home</span><span class="c47"> </span>  <span class="c46"> Browse </span>  <span class="c46"> Library </span>  <span class="c46"> Queue </span>  <span class="c46"> Providers </span>  <span class="c46"> Stats </span>  <span class="c46"> Settings </span>
+  <span class="c49">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="c53">Frieren: Beyond Journey’s End</span>
+  <span class="c46">PG-13  ·  Adventure / Fantasy  ·  AnimeKai</span>
+
+  <span class="c45">Episode catalog</span>                                                      <span class="c46">09 episodes</span>    <span class="c45">Series inspector</span>              <span class="c46">TV</span>
+  <span class="c49">────────────────────────────────────────────────────────────────────────────────</span>    <span class="c49">────────────────────────────────</span>
+  <span class="c46">  NO.   EPISODE</span>                                                         <span class="c46">STATUS  </span>    <span class="c58">▀</span><span class="c59">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span>
+  <span class="c56">  E001  The Journey’s End</span>                                               <span class="c57">✓ Done</span>      <span class="c59">▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c60">▀</span><span class="c59">▀▀▀▀▀▀▀▀</span><span class="c58">▀</span><span class="c59">▀▀▀▀▀▀▀▀</span>
+  <span class="c56">  E002  It Didn’t Have to Be Magic…</span>                                     <span class="c57">✓ Done</span>      <span class="c61">▀▀▀▀▀</span><span class="c62">▀</span><span class="c61">▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c63">▀</span><span class="c64">▀▀▀▀</span><span class="c63">▀</span><span class="c61">▀▀▀▀▀▀</span>
+  <span class="c56">  E003  Killing Magic</span>                                                   <span class="c57">✓ Done</span>      <span class="c65">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c63">▀</span><span class="c64">▀▀▀▀▀▀</span><span class="c65">▀▀</span><span class="c66">▀</span><span class="c65">▀▀▀</span>
+  <span class="c56">  E004  The Land Where Souls Rest</span>                                       <span class="c57">✓ Done</span>      <span class="c67">▀▀▀▀▀▀▀▀</span><span class="c68">▀▀</span><span class="c66">▀</span><span class="c67">▀▀▀▀▀▀▀▀▀</span><span class="c64">▀</span><span class="c69">▀▀</span><span class="c64">▀▀▀</span><span class="c67">▀▀▀▀▀▀</span>
+  <span class="c56">  E005  Phantoms of the Dead</span>                                            <span class="c57">✓ Done</span>      <span class="c70">▀▀▀▀</span><span class="c71">▀</span><span class="c72">▀▀▀▀▀▀</span><span class="c70">▀▀▀▀▀▀▀▀▀</span><span class="c72">▀▀▀▀</span><span class="c69">▀</span><span class="c71">▀▀</span><span class="c70">▀▀▀▀▀</span>
+  <span class="c56">  E006  The Hero of the Village</span>                                         <span class="c57">✓ Done</span>      <span class="c73">▀▀▀</span><span class="c71">▀</span><span class="c72">▀▀▀▀▀▀▀▀</span><span class="c73">▀▀</span><span class="c74">▀</span><span class="c73">▀▀▀▀</span><span class="c72">▀▀▀▀▀▀▀▀▀</span><span class="c73">▀</span><span class="c74">▀▀</span><span class="c73">▀</span>
+  <span class="c86">▸ E007  Like a Fairy Tale                                                  58%  </span>    <span class="c76">▀</span><span class="c77">▀</span><span class="c76">▀</span><span class="c72">▀▀▀▀▀▀</span><span class="c78">▀▀</span><span class="c79">▀</span><span class="c78">▀▀▀</span><span class="c79">▀</span><span class="c72">▀▀▀▀▀▀▀▀▀</span><span class="c79">▀▀▀</span><span class="c78">▀▀▀</span><span class="c79">▀</span>
+  <span class="c56">  E008  Frieren the Slayer</span>                                            <span class="c46">Unplayed  </span>    <span class="c78">▀</span><span class="c72">▀▀▀</span><span class="c79">▀</span><span class="c72">▀▀▀</span><span class="c78">▀▀▀▀▀▀▀▀▀</span><span class="c79">▀▀▀</span><span class="c72">▀▀▀</span><span class="c79">▀</span><span class="c80">▀▀</span><span class="c78">▀▀▀▀▀▀</span>
+  <span class="c56">  E009  Aura the Guillotine</span>                                           <span class="c46">Unplayed  </span>    <span class="c81">▀▀▀▀▀</span><span class="c80">▀</span><span class="c78">▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c80">▀▀</span><span class="c82">▀▀</span><span class="c81">▀▀▀▀</span><span class="c80">▀▀▀▀</span><span class="c78">▀</span>
+                                                                                      <span class="c81">▀▀▀▀▀▀▀</span><span class="c80">▀▀▀</span><span class="c78">▀▀</span><span class="c83">▀▀▀▀▀</span><span class="c80">▀</span><span class="c81">▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c80">▀</span>
+                                                                                      <span class="c81">▀▀▀▀▀▀</span><span class="c84">▀▀▀</span><span class="c85">▀▀▀▀▀▀▀▀▀▀▀</span><span class="c84">▀▀▀</span><span class="c81">▀▀▀▀▀▀▀▀▀</span>
+  <span class="c45">E007  /  LIKE A FAIRY TALE</span>                                                          <span class="c84">▀▀▀</span><span class="c85">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c84">▀▀▀▀▀</span><span class="c85">▀</span>
+
+  <span class="c54"> </span><span class="c55">↵ Resume at 14:00</span><span class="c54"> </span>  <span class="c47"> </span><span class="c48">d Download</span><span class="c47"> </span>  <span class="c47"> </span><span class="c48">w Mark watched</span><span class="c47"> </span>                                 <span class="c53">Frieren: Beyond Journey’s End</span>
+  <span class="c52">━━━━━━━━━━━━━━━</span><span class="c49">───────────</span>  <span class="c46">58%  ·  14:00 / 24:00</span>                                   <span class="c47"> </span><span class="c48">PG-13</span><span class="c47"> </span>  <span class="c47"> </span><span class="c48">24 min</span><span class="c47"> </span>
+
+                                                                                      <span class="c46">Adventure  /  Fantasy</span>
+                                                                                      <span class="c46">Magic  ·  Journey  ·  Elves</span>
+
+                                                                                      <span class="c45">SOURCE</span>
+                                                                                      <span class="c56">AnimeKai</span>
+
+
+
+
+
+
+
+  <span class="c49">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c45">↓ E008</span><span class="c46">  64% · 8.2 MB/s</span>                                                  <span class="c46">↑↓ Select   ↵ Resume   d Download   esc Back</span></template>
+<template id="concept-episodes-compact-dark">  <span class="c32">◆  WEEB BOX</span>  <span class="c33">/  WATCH DESK</span>                              <span class="c33">●  3 sources enabled</span>
+  <span class="c34"> </span><span class="c35">Home</span><span class="c34"> </span>  <span class="c33"> Browse </span>  <span class="c33"> Library </span>  <span class="c33"> Queue </span>  <span class="c33"> Providers </span>  <span class="c33"> Stats </span>  <span class="c33"> Settings </span>
+  <span class="c36">────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="c40">Frieren: Beyond Journey’s End</span>
+  <span class="c33">PG-13  ·  Adventure / Fantasy  ·  AnimeKai</span>
+  <span class="c41"> </span><span class="c42">↵ Resume at 14:00</span><span class="c41"> </span>  <span class="c34"> </span><span class="c35">d Download</span><span class="c34"> </span>  <span class="c34"> </span><span class="c35">w Mark watched</span><span class="c34"> </span>
+  <span class="c39">━━━━━━━━━━━━━━━</span><span class="c36">───────────</span>  <span class="c33">58%  ·  14:00 / 24:00</span>
+  <span class="c32">Episode catalog</span>                                                  <span class="c33">09 episodes</span>
+  <span class="c36">────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c33">  NO.   EPISODE</span>                                                     <span class="c33">STATUS  </span>
+  <span class="c43">  E001  The Journey’s End</span>                                           <span class="c44">✓ Done</span>
+  <span class="c43">  E002  It Didn’t Have to Be Magic…</span>                                 <span class="c44">✓ Done</span>
+  <span class="c43">  E003  Killing Magic</span>                                               <span class="c44">✓ Done</span>
+  <span class="c43">  E004  The Land Where Souls Rest</span>                                   <span class="c44">✓ Done</span>
+  <span class="c43">  E005  Phantoms of the Dead</span>                                        <span class="c44">✓ Done</span>
+  <span class="c43">  E006  The Hero of the Village</span>                                     <span class="c44">✓ Done</span>
+  <span class="c75">▸ E007  Like a Fairy Tale                                              58%  </span>
+  <span class="c43">  E008  Frieren the Slayer</span>                                        <span class="c33">Unplayed  </span>
+  <span class="c43">  E009  Aura the Guillotine</span>                                       <span class="c33">Unplayed  </span>
+
+
+  <span class="c36">────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c32">↓ E008</span><span class="c33">  64% · 8.2 MB/s</span>          <span class="c33">↑↓ Select   ↵ Resume   d Download   esc Back</span></template>
+<template id="concept-episodes-compact-light">  <span class="c45">◆  WEEB BOX</span>  <span class="c46">/  WATCH DESK</span>                              <span class="c46">●  3 sources enabled</span>
+  <span class="c47"> </span><span class="c48">Home</span><span class="c47"> </span>  <span class="c46"> Browse </span>  <span class="c46"> Library </span>  <span class="c46"> Queue </span>  <span class="c46"> Providers </span>  <span class="c46"> Stats </span>  <span class="c46"> Settings </span>
+  <span class="c49">────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="c53">Frieren: Beyond Journey’s End</span>
+  <span class="c46">PG-13  ·  Adventure / Fantasy  ·  AnimeKai</span>
+  <span class="c54"> </span><span class="c55">↵ Resume at 14:00</span><span class="c54"> </span>  <span class="c47"> </span><span class="c48">d Download</span><span class="c47"> </span>  <span class="c47"> </span><span class="c48">w Mark watched</span><span class="c47"> </span>
+  <span class="c52">━━━━━━━━━━━━━━━</span><span class="c49">───────────</span>  <span class="c46">58%  ·  14:00 / 24:00</span>
+  <span class="c45">Episode catalog</span>                                                  <span class="c46">09 episodes</span>
+  <span class="c49">────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c46">  NO.   EPISODE</span>                                                     <span class="c46">STATUS  </span>
+  <span class="c56">  E001  The Journey’s End</span>                                           <span class="c57">✓ Done</span>
+  <span class="c56">  E002  It Didn’t Have to Be Magic…</span>                                 <span class="c57">✓ Done</span>
+  <span class="c56">  E003  Killing Magic</span>                                               <span class="c57">✓ Done</span>
+  <span class="c56">  E004  The Land Where Souls Rest</span>                                   <span class="c57">✓ Done</span>
+  <span class="c56">  E005  Phantoms of the Dead</span>                                        <span class="c57">✓ Done</span>
+  <span class="c56">  E006  The Hero of the Village</span>                                     <span class="c57">✓ Done</span>
+  <span class="c86">▸ E007  Like a Fairy Tale                                              58%  </span>
+  <span class="c56">  E008  Frieren the Slayer</span>                                        <span class="c46">Unplayed  </span>
+  <span class="c56">  E009  Aura the Guillotine</span>                                       <span class="c46">Unplayed  </span>
+
+
+  <span class="c49">────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c45">↓ E008</span><span class="c46">  64% · 8.2 MB/s</span>          <span class="c46">↑↓ Select   ↵ Resume   d Download   esc Back</span></template>
+<template id="concept-home-dark">  <span class="c32">◆  WEEB BOX</span>  <span class="c33">/  WATCH DESK</span>                                                                      <span class="c33">●  3 sources enabled</span>
+  <span class="c34"> </span><span class="c35">Home</span><span class="c34"> </span>  <span class="c33"> Browse </span>  <span class="c33"> Library </span>  <span class="c33"> Queue </span>  <span class="c33"> Providers </span>  <span class="c33"> Stats </span>  <span class="c33"> Settings </span>
+  <span class="c36">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="c37">  /  Search across all providers…</span><span class="c38">                                                                                   </span>
+
+  <span class="c39">╭──────────────────────────────────────────────────────────────────────────────────╮</span>  <span class="c58">▀</span><span class="c59">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span>
+  <span class="c39">│</span> <span class="c32">CONTINUE WATCHING</span>  <span class="c33">/  NEXT UP</span>                                                    <span class="c39">│</span>  <span class="c87">▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c60">▀</span><span class="c87">▀▀▀▀</span><span class="c60">▀▀▀▀</span><span class="c64">▀</span><span class="c87">▀▀▀▀▀▀</span>
+  <span class="c39">│</span>                                                                                  <span class="c39">│</span>  <span class="c65">▀▀▀▀▀</span><span class="c66">▀</span><span class="c65">▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c64">▀▀▀▀▀▀</span><span class="c63">▀</span><span class="c65">▀▀▀▀▀</span>
+  <span class="c39">│</span> <span class="c40">Frieren: Beyond Journey’s End</span>                                                    <span class="c39">│</span>  <span class="c88">▀▀▀▀</span><span class="c68">▀▀▀▀</span><span class="c72">▀▀</span><span class="c88">▀▀▀▀▀▀▀▀</span><span class="c89">▀</span><span class="c69">▀</span><span class="c72">▀▀</span><span class="c69">▀▀</span><span class="c68">▀</span><span class="c88">▀▀▀</span><span class="c89">▀</span><span class="c88">▀</span>
+  <span class="c39">│</span> <span class="c33">E007  ·  Like a Fairy Tale</span>                                                       <span class="c39">│</span>  <span class="c73">▀▀▀</span><span class="c72">▀▀▀▀▀▀▀▀</span><span class="c71">▀</span><span class="c73">▀</span><span class="c74">▀</span><span class="c73">▀▀▀</span><span class="c71">▀</span><span class="c72">▀▀▀▀▀▀▀▀</span><span class="c73">▀</span><span class="c74">▀▀</span><span class="c73">▀</span>
+  <span class="c39">│</span>                                                                                  <span class="c39">│</span>  <span class="c79">▀</span><span class="c76">▀</span><span class="c72">▀▀▀▀▀▀</span><span class="c78">▀▀▀▀▀▀▀</span><span class="c79">▀</span><span class="c72">▀▀▀▀▀▀</span><span class="c79">▀</span><span class="c78">▀▀▀▀▀▀▀</span>
+  <span class="c39">│</span> <span class="c39">━━━━━━━━━━━━━━━━━━</span><span class="c36">──────────────</span><span class="c33">  14:00 / 24:00</span>                                  <span class="c39">│</span>  <span class="c81">▀</span><span class="c80">▀▀</span><span class="c81">▀</span><span class="c80">▀</span><span class="c79">▀▀</span><span class="c78">▀▀▀▀▀▀▀▀▀▀▀</span><span class="c80">▀▀</span><span class="c82">▀</span><span class="c80">▀</span><span class="c81">▀▀▀</span><span class="c80">▀▀▀▀</span><span class="c78">▀</span>
+  <span class="c39">│</span> <span class="c41"> </span><span class="c42">↵  Resume episode</span><span class="c41"> </span>                                                              <span class="c39">│</span>  <span class="c81">▀▀▀▀▀▀▀▀</span><span class="c84">▀</span><span class="c83">▀▀▀▀▀▀▀▀</span><span class="c84">▀▀</span><span class="c81">▀▀▀▀▀▀▀▀▀▀▀</span>
+  <span class="c39">╰──────────────────────────────────────────────────────────────────────────────────╯</span>  <span class="c84">▀▀▀▀</span><span class="c85">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c84">▀▀▀▀▀▀▀</span>
+
+  <span class="c32">Watch history</span>                                        <span class="c33">03 shows</span>    <span class="c32">Recent searches</span>                          <span class="c33">05 queries</span>
+  <span class="c36">─────────────────────────────────────────────────────────────</span>    <span class="c36">───────────────────────────────────────────────────</span>
+  <span class="c43">The Apothecary Diaries</span>                              <span class="c33">E004</span>  <span class="c33">33%</span>    <span class="c43">Frieren</span>                                          <span class="c33">2m</span>
+  <span class="c43">Delicious in Dungeon</span>                             <span class="c33">E003</span>  <span class="c44">✓ Done</span>    <span class="c43">The Apothecary Diaries</span>                           <span class="c33">1h</span>
+  <span class="c43">Skip and Loafer</span>                                     <span class="c33">E002</span>  <span class="c33">13%</span>    <span class="c43">Delicious in Dungeon</span>                             <span class="c33">2h</span>
+                                                                   <span class="c43">Skip and Loafer</span>                                  <span class="c33">1d</span>
+  <span class="c32">Library</span>                                                 <span class="c33">LOCAL</span>    <span class="c43">Mob Psycho 100</span>                                   <span class="c33">2d</span>
+  <span class="c36">─────────────────────────────────────────────────────────────</span>
+  <span class="c34"> </span><span class="c35">14 files</span><span class="c34"> </span>  <span class="c34"> </span><span class="c35">4.0 GB</span><span class="c34"> </span>  <span class="c34"> </span><span class="c35">12 watched</span><span class="c34"> </span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <span class="c36">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c44">● Ready</span><span class="c33">  ·  Queue idle</span>                                                                  <span class="c33">↵ Resume   / Search   ? Help</span></template>
+<template id="concept-home-light">  <span class="c45">◆  WEEB BOX</span>  <span class="c46">/  WATCH DESK</span>                                                                      <span class="c46">●  3 sources enabled</span>
+  <span class="c47"> </span><span class="c48">Home</span><span class="c47"> </span>  <span class="c46"> Browse </span>  <span class="c46"> Library </span>  <span class="c46"> Queue </span>  <span class="c46"> Providers </span>  <span class="c46"> Stats </span>  <span class="c46"> Settings </span>
+  <span class="c49">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="c50">  /  Search across all providers…</span><span class="c51">                                                                                   </span>
+
+  <span class="c52">╭──────────────────────────────────────────────────────────────────────────────────╮</span>  <span class="c58">▀</span><span class="c59">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span>
+  <span class="c52">│</span> <span class="c45">CONTINUE WATCHING</span>  <span class="c46">/  NEXT UP</span>                                                    <span class="c52">│</span>  <span class="c87">▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c60">▀</span><span class="c87">▀▀▀▀</span><span class="c60">▀▀▀▀</span><span class="c64">▀</span><span class="c87">▀▀▀▀▀▀</span>
+  <span class="c52">│</span>                                                                                  <span class="c52">│</span>  <span class="c65">▀▀▀▀▀</span><span class="c66">▀</span><span class="c65">▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c64">▀▀▀▀▀▀</span><span class="c63">▀</span><span class="c65">▀▀▀▀▀</span>
+  <span class="c52">│</span> <span class="c53">Frieren: Beyond Journey’s End</span>                                                    <span class="c52">│</span>  <span class="c88">▀▀▀▀</span><span class="c68">▀▀▀▀</span><span class="c72">▀▀</span><span class="c88">▀▀▀▀▀▀▀▀</span><span class="c89">▀</span><span class="c69">▀</span><span class="c72">▀▀</span><span class="c69">▀▀</span><span class="c68">▀</span><span class="c88">▀▀▀</span><span class="c89">▀</span><span class="c88">▀</span>
+  <span class="c52">│</span> <span class="c46">E007  ·  Like a Fairy Tale</span>                                                       <span class="c52">│</span>  <span class="c73">▀▀▀</span><span class="c72">▀▀▀▀▀▀▀▀</span><span class="c71">▀</span><span class="c73">▀</span><span class="c74">▀</span><span class="c73">▀▀▀</span><span class="c71">▀</span><span class="c72">▀▀▀▀▀▀▀▀</span><span class="c73">▀</span><span class="c74">▀▀</span><span class="c73">▀</span>
+  <span class="c52">│</span>                                                                                  <span class="c52">│</span>  <span class="c79">▀</span><span class="c76">▀</span><span class="c72">▀▀▀▀▀▀</span><span class="c78">▀▀▀▀▀▀▀</span><span class="c79">▀</span><span class="c72">▀▀▀▀▀▀</span><span class="c79">▀</span><span class="c78">▀▀▀▀▀▀▀</span>
+  <span class="c52">│</span> <span class="c52">━━━━━━━━━━━━━━━━━━</span><span class="c49">──────────────</span><span class="c46">  14:00 / 24:00</span>                                  <span class="c52">│</span>  <span class="c81">▀</span><span class="c80">▀▀</span><span class="c81">▀</span><span class="c80">▀</span><span class="c79">▀▀</span><span class="c78">▀▀▀▀▀▀▀▀▀▀▀</span><span class="c80">▀▀</span><span class="c82">▀</span><span class="c80">▀</span><span class="c81">▀▀▀</span><span class="c80">▀▀▀▀</span><span class="c78">▀</span>
+  <span class="c52">│</span> <span class="c54"> </span><span class="c55">↵  Resume episode</span><span class="c54"> </span>                                                              <span class="c52">│</span>  <span class="c81">▀▀▀▀▀▀▀▀</span><span class="c84">▀</span><span class="c83">▀▀▀▀▀▀▀▀</span><span class="c84">▀▀</span><span class="c81">▀▀▀▀▀▀▀▀▀▀▀</span>
+  <span class="c52">╰──────────────────────────────────────────────────────────────────────────────────╯</span>  <span class="c84">▀▀▀▀</span><span class="c85">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span class="c84">▀▀▀▀▀▀▀</span>
+
+  <span class="c45">Watch history</span>                                        <span class="c46">03 shows</span>    <span class="c45">Recent searches</span>                          <span class="c46">05 queries</span>
+  <span class="c49">─────────────────────────────────────────────────────────────</span>    <span class="c49">───────────────────────────────────────────────────</span>
+  <span class="c56">The Apothecary Diaries</span>                              <span class="c46">E004</span>  <span class="c46">33%</span>    <span class="c56">Frieren</span>                                          <span class="c46">2m</span>
+  <span class="c56">Delicious in Dungeon</span>                             <span class="c46">E003</span>  <span class="c57">✓ Done</span>    <span class="c56">The Apothecary Diaries</span>                           <span class="c46">1h</span>
+  <span class="c56">Skip and Loafer</span>                                     <span class="c46">E002</span>  <span class="c46">13%</span>    <span class="c56">Delicious in Dungeon</span>                             <span class="c46">2h</span>
+                                                                   <span class="c56">Skip and Loafer</span>                                  <span class="c46">1d</span>
+  <span class="c45">Library</span>                                                 <span class="c46">LOCAL</span>    <span class="c56">Mob Psycho 100</span>                                   <span class="c46">2d</span>
+  <span class="c49">─────────────────────────────────────────────────────────────</span>
+  <span class="c47"> </span><span class="c48">14 files</span><span class="c47"> </span>  <span class="c47"> </span><span class="c48">4.0 GB</span><span class="c47"> </span>  <span class="c47"> </span><span class="c48">12 watched</span><span class="c47"> </span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <span class="c49">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+  <span class="c57">● Ready</span><span class="c46">  ·  Queue idle</span>                                                                  <span class="c46">↵ Resume   / Search   ? Help</span></template>
+<script>
+const media = matchMedia("(prefers-color-scheme: dark)");
+const screens = {
+  home: ["120 × 40", "Continue Watching",
+    "One show takes the lead with its episode, timestamp, and a clear Resume action."],
+  compact: ["80 × 24", "Continue Watching, compact",
+    "The hero and primary action stay. Artwork and secondary stats yield to history and search."],
+  episodes: ["120 × 40", "Episode catalog + inspector",
+    "Aligned rows, a full-width selection, and a cover inspector. The activity bar shows a sample download."],
+  "episodes-compact": ["80 × 24", "Episode catalog, compact",
+    "Inline metadata replaces the inspector. Resume, downloads, and the entire sample catalog still fit."]
+};
+let theme = "system";
+try { theme = localStorage.getItem("weeb-box-preview-theme") || theme; } catch {}
+if (!["light", "dark", "system"].includes(theme)) theme = "system";
+document.querySelector(`input[name=theme][value=${theme}]`).checked = true;
+function draw() {
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  const palette = theme === "system" ? (media.matches ? "dark" : "light") : theme;
+  const scene = document.querySelector("input[name=screen]:checked").value;
+  const baseline = document.querySelector("input[name=baseline]:checked").value;
+  const [size, title, note] = screens[scene];
+  for (const [id, source] of [["before", baseline], ["after", "concept"]]) {
+    const capture = document.getElementById(id);
+    capture.replaceChildren(document.getElementById(`${source}-${scene}-${palette}`).content.cloneNode(true));
+    capture.scrollLeft = 0;
+  }
+  document.getElementById("mode").textContent = `${size} cells · ${palette} palette`;
+  document.getElementById("before-label").textContent = baseline === "after" ? "Previous TUI" : "Original TUI";
+  document.getElementById("after-label").textContent = title;
+  document.getElementById("before-note").textContent = baseline === "before"
+    ? "The app before the dashboard and navigation refresh."
+    : scene.startsWith("episodes") ? "The previous two-panel layout with a separate episode action card."
+    : "The previous dashboard gives history and recent searches similar weight.";
+  document.getElementById("after-note").textContent = note;
+}
+document.querySelectorAll("input[type=radio]").forEach(input => input.addEventListener("change", () => {
+  if (input.name === "theme") {
+    theme = input.value;
+    try { localStorage.setItem("weeb-box-preview-theme", theme); } catch {}
+  }
+  draw();
+}));
+media.addEventListener("change", draw);
+draw();
+</script>
+</html>

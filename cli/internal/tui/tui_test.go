@@ -483,13 +483,11 @@ func TestLibraryShortcutAndMissingLocalFile(t *testing.T) {
 func TestMouseClickFocusesSearch(t *testing.T) {
 	m := New(nil, t.TempDir(), nil)
 	m.width, m.height = 80, 24
+	m.focus = focusRecent
+	m.search.Blur()
 	m.layout()
-	tagline := 0
-	if m.height >= 28 {
-		tagline = 1
-	}
 	updated, _ := m.handleMouse(tea.MouseMsg{
-		X: m.leftMargin() + 4, Y: m.bodyOffset() + 4 + tagline,
+		X: m.leftMargin() + 4, Y: m.bodyOffset(),
 		Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
 	})
 	if got := updated.(Model); got.focus != focusSearch {
@@ -502,10 +500,9 @@ func TestMouseSelectsResumeAndWheelMovesList(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.resume.SetItems([]list.Item{item{title: "Frieren"}})
 	m.layout()
-	tagline := 1
-	panelTop := m.bodyOffset() + 8 + tagline
+	panelTop := m.bodyOffset() + m.homeHistoryTop()
 	updated, _ := m.handleMouse(tea.MouseMsg{
-		X: m.leftMargin() + 2, Y: panelTop + 2,
+		X: m.leftMargin() + 2, Y: panelTop,
 		Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
 	})
 	got := updated.(Model)
@@ -517,12 +514,88 @@ func TestMouseSelectsResumeAndWheelMovesList(t *testing.T) {
 	got.main.SetItems([]list.Item{item{title: "A"}, item{title: "B"}})
 	got.main.Select(0)
 	got.layout()
-	updated, _ = got.handleMouse(tea.MouseMsg{
+	updated, preview := got.handleMouse(tea.MouseMsg{
 		X: got.leftMargin() + 2, Y: got.bodyOffset() + 10,
 		Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress,
 	})
 	if idx := updated.(Model).main.Index(); idx != 1 {
 		t.Fatalf("wheel index = %d", idx)
+	}
+	if preview == nil {
+		t.Fatal("wheel selection did not schedule a preview")
+	}
+}
+
+func TestNavigationClicksAndActiveTabs(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 80, 24
+	lines := strings.Split(m.View(), "\n")
+	if !strings.Contains(lines[2], "[Home]") {
+		t.Fatalf("missing active Home tab: %q", lines[2])
+	}
+	click := func(m Model, label string) Model {
+		t.Helper()
+		// Check the painted position, not the hit-test's own coordinates.
+		line := strings.Split(m.View(), "\n")[2]
+		i := strings.Index(line, label)
+		if i < 0 {
+			t.Fatalf("missing %q tab: %q", label, line)
+		}
+		updated, _ := m.handleMouse(tea.MouseMsg{
+			X: lipgloss.Width(line[:i]), Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+		})
+		return updated.(Model)
+	}
+	m = click(m, "Library")
+	if m.screen != screenLibrary || !m.libraryLoading {
+		t.Fatalf("Library tab: screen=%v loading=%v", m.screen, m.libraryLoading)
+	}
+	m = click(m, "Settings")
+	updated, _ := m.Update(libraryMsg{})
+	m = updated.(Model)
+	if m.screen != screenSettings || !strings.Contains(m.navView(), "[Settings]") {
+		t.Fatalf("library scan interrupted the Settings tab: screen=%v", m.screen)
+	}
+	m.screen = screenBrowse
+	if !strings.Contains(m.navView(), "[Browse]") {
+		t.Fatal("genre results should keep Browse active")
+	}
+	m = click(m, "Browse")
+	if m.screen != screenGenres {
+		t.Fatalf("Browse tab from genre results: screen=%v", m.screen)
+	}
+	m = click(m, "Home")
+	if m.screen != screenHome {
+		t.Fatalf("Home tab: screen=%v", m.screen)
+	}
+}
+
+func TestEpisodeResumeActionClick(t *testing.T) {
+	for _, width := range []int{80, 120} {
+		m := New([]provider.Provider{stubProvider{}}, t.TempDir(), nil)
+		m.width, m.height, m.screen = width, 24, screenEpisodes
+		m.prov = stubProvider{}
+		m.episodes = []provider.Episode{{Number: 1, URL: "ep", Title: strings.Repeat("Long title ", 8)}}
+		m.progressByURL["ep"] = store.Progress{Position: 840, Duration: 1440}
+		m.main.SetItems(m.episodeItems())
+		m.layout()
+		for y, line := range strings.Split(m.View(), "\n") {
+			i := strings.Index(line, "Resume at 14:00")
+			if i < 0 {
+				continue
+			}
+			updated, cmd := m.handleMouse(tea.MouseMsg{
+				X: lipgloss.Width(line[:i]), Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+			})
+			got := updated.(Model)
+			if got.screen != screenBusy || got.busy != busyStream || cmd == nil {
+				t.Fatalf("%d columns: resume click did not open stream", width)
+			}
+			break
+		}
+		if !strings.Contains(m.View(), "Resume at 14:00") {
+			t.Fatalf("%d columns: missing resume action", width)
+		}
 	}
 }
 
@@ -644,7 +717,7 @@ func TestCreatorHeaderContents(t *testing.T) {
 	if !strings.Contains(view, "\x1b]8;;\x1b\\") {
 		t.Fatal("hyperlink is not closed")
 	}
-	header := strings.Split(view, "\n")[0]
+	header := strings.Split(view, "\n")[1]
 	if !strings.Contains(header, "@chotathanos") {
 		t.Fatalf("credit is not in the header: %q", header)
 	}
@@ -659,7 +732,7 @@ func TestCreatorHeaderFit(t *testing.T) {
 		if got := lipgloss.Height(view); got != size.h {
 			t.Errorf("%dx%d: height = %d", size.w, size.h, got)
 		}
-		header := strings.Split(view, "\n")[0]
+		header := strings.Split(view, "\n")[1]
 		if !strings.Contains(header, "(developed by ") || !strings.Contains(header, "@chotathanos") {
 			t.Errorf("%dx%d: credit missing from header", size.w, size.h)
 		}
@@ -671,19 +744,41 @@ func TestCreatorHeaderFit(t *testing.T) {
 	}
 }
 
+func TestAppFrameEnclosesHeaderAndFooter(t *testing.T) {
+	for _, size := range []tea.WindowSizeMsg{{Width: 60, Height: 22}, {Width: 80, Height: 24}, {Width: 185, Height: 70}} {
+		m, _ := New(nil, t.TempDir(), nil).Update(size)
+		lines := strings.Split(ansiSeq.ReplaceAllString(m.View(), ""), "\n")
+		if len(lines) != size.Height {
+			t.Fatalf("%v: got %d rows", size, len(lines))
+		}
+		left := strings.Index(lines[0], "┌")
+		if left < 0 || !strings.Contains(lines[0], "┐") || !strings.Contains(lines[len(lines)-1], "└") || !strings.Contains(lines[len(lines)-1], "┘") {
+			t.Fatalf("%v: missing frame corners", size)
+		}
+		for y, line := range lines[1 : len(lines)-1] {
+			if !strings.HasPrefix(line[left:], "│") || !strings.HasSuffix(strings.TrimSpace(line), "│") {
+				t.Fatalf("%v: row %d is outside the frame", size, y+1)
+			}
+		}
+		if !strings.Contains(lines[1], "weeb-box") || !strings.Contains(lines[len(lines)-2], "Download idle") {
+			t.Fatalf("%v: header or activity footer is outside the frame", size)
+		}
+	}
+}
+
 func TestCreatorHitTarget(t *testing.T) {
 	m := New(nil, t.TempDir(), nil)
 	m.width, m.height = 120, 40
 	x := m.leftMargin() + lipgloss.Width("weeb-box  ")
-	if !m.creatorHit(x, 0) {
+	if !m.creatorHit(x, 1) {
 		t.Fatal("header credit is not clickable")
 	}
-	if m.creatorHit(x, 1) {
-		t.Fatal("rule row should not open the credit link")
+	if m.creatorHit(x, 0) {
+		t.Fatal("border should not open the credit link")
 	}
 
 	m.width, m.height = 80, 24
-	if !m.creatorHit(m.leftMargin()+lipgloss.Width("weeb-box  "), 0) {
+	if !m.creatorHit(m.leftMargin()+lipgloss.Width("weeb-box  "), 1) {
 		t.Fatal("header credit should be visible at 80x24")
 	}
 }
@@ -1700,7 +1795,7 @@ func TestHomeRowsCompactRender(t *testing.T) {
 	m.layout()
 
 	row := m.resume.View()
-	for _, plain := range []string{"Frieren", "▰▰▱▱", "50%", "E005"} {
+	for _, plain := range []string{"Frieren", "50%", "E005"} {
 		if !strings.Contains(row, plain) {
 			t.Errorf("home resume row is missing %q: %q", plain, row)
 		}
@@ -1721,8 +1816,8 @@ func TestHomeClickRowHeights(t *testing.T) {
 	m.recent.SetItems(items)
 	m.layout()
 
-	panelsTop := 8 + 1 // homeView adds the tagline at >= 28 rows
-	half := (m.viewWidth() - 2) / 2
+	listTop := m.homeHistoryTop()
+	half := m.homeHistoryWidth()
 	click := func(x, y int) Model {
 		updated, _ := m.handleMouse(tea.MouseMsg{
 			X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
@@ -1730,12 +1825,12 @@ func TestHomeClickRowHeights(t *testing.T) {
 		return updated.(Model)
 	}
 
-	got := click(m.leftMargin()+2, m.bodyOffset()+panelsTop+2+4)
+	got := click(m.leftMargin()+2, m.bodyOffset()+listTop+2)
 	if got.focus != focusResume || got.resume.Index() != 2 {
 		t.Fatalf("resume click: focus=%v index=%d", got.focus, got.resume.Index())
 	}
 
-	got = click(m.leftMargin()+half+4, m.bodyOffset()+panelsTop+2+3)
+	got = click(m.leftMargin()+half+4, m.bodyOffset()+listTop+3)
 	if got.focus != focusRecent || got.recent.Index() != 3 {
 		t.Fatalf("recent click: focus=%v index=%d", got.focus, got.recent.Index())
 	}
@@ -1831,7 +1926,7 @@ func TestHomeRowsAlignColumns(t *testing.T) {
 	if columns[0] != columns[1] {
 		t.Fatalf("episode column misaligned: %v\n%s", columns, plain)
 	}
-	for _, want := range []string{"▰▱▱▱", "13%", "5 eps"} {
+	for _, want := range []string{"13%", "40%"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("home rows missing %q: %q", want, plain)
 		}
@@ -1854,7 +1949,7 @@ func TestHomeRowsShowFinishedAndAlignedRecent(t *testing.T) {
 	m.layout()
 
 	view := ansiSeq.ReplaceAllString(m.resume.View(), "")
-	if !strings.Contains(view, "done") || !strings.Contains(view, "▰▰▰▰") {
+	if !strings.Contains(view, "✓ Done") {
 		t.Errorf("finished row = %q", view)
 	}
 
@@ -1882,7 +1977,7 @@ func TestHomeRowsNarrowKeepProgress(t *testing.T) {
 	m.layout()
 
 	plain := ansiSeq.ReplaceAllString(m.resume.View(), "")
-	if !strings.Contains(plain, "▰") || !strings.Contains(plain, "40%") {
+	if !strings.Contains(plain, "40%") {
 		t.Fatalf("narrow home row lost progress: %q", plain)
 	}
 }

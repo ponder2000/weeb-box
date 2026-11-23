@@ -3,7 +3,7 @@
 # Exits 1 when a provider fails, after the table is written, so CI still records it.
 set -u
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 table=$(mktemp)
 {
@@ -31,8 +31,8 @@ done
 awk -v table="$table" '
 	/<!-- provider-status:start -->/ { print; while ((getline line < table) > 0) print line; skip = 1; next }
 	/<!-- provider-status:end -->/ { skip = 0 }
-	!skip' README.md >"$table.readme"
-mv "$table.readme" README.md
+	!skip' ../README.md >"$table.readme"
+mv "$table.readme" ../README.md
 rm -f "$table"
 
 if [ -n "$failed" ]; then

@@ -17,10 +17,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
           cache: true
       - name: Ensure ffmpeg
         run: command -v ffmpeg || brew install ffmpeg
       - run: go build ./...
+        working-directory: cli
       - run: go vet ./...
+        working-directory: cli
       - run: go test ./...
+        working-directory: cli

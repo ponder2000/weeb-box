@@ -78,8 +78,9 @@ func TestDetailShowsDurationQualityAndFiller(t *testing.T) {
 	m.metaCache[metadata.Key("Show")] = metadata.Info{Genres: []string{"Action"}, Duration: 24}
 	m.fillerKinds[2] = filler.Filler
 	m.variantsByURL["ep2"] = []string{"1080p", "720p", "480p"}
+	m.layout()
 
-	view := m.detailView(m.episodes[0], 44)
+	view := m.episodesView()
 	for _, want := range []string{"24m per episode", "quality 1080p · 720p · 480p", "FILLER EPISODE"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("detail missing %q:\n%s", want, view)
@@ -89,7 +90,7 @@ func TestDetailShowsDurationQualityAndFiller(t *testing.T) {
 	// Canon episodes get no filler banner, and a failed probe shows no quality.
 	m.fillerKinds[2] = filler.Canon
 	m.variantsByURL["ep2"] = nil
-	view = m.detailView(m.episodes[0], 44)
+	view = m.episodesView()
 	if strings.Contains(view, "FILLER EPISODE") || strings.Contains(view, "quality") {
 		t.Errorf("unexpected lines:\n%s", view)
 	}
@@ -97,7 +98,7 @@ func TestDetailShowsDurationQualityAndFiller(t *testing.T) {
 	// While the probe is in flight the pane says so.
 	delete(m.variantsByURL, "ep2")
 	m.variantLoading["ep2"] = true
-	if view := m.detailView(m.episodes[0], 44); !strings.Contains(view, "checking quality") {
+	if view := m.episodesView(); !strings.Contains(view, "checking quality") {
 		t.Errorf("missing loading hint:\n%s", view)
 	}
 }
@@ -139,7 +140,7 @@ func TestEnsureVariantsProbesOnce(t *testing.T) {
 func TestDetailFillerOnlyWhenNotCanon(t *testing.T) {
 	m := episodeModel(t, provider.Episode{Number: 5, URL: "ep5"})
 	m.fillerKinds[5] = filler.Mixed
-	if view := m.detailView(m.episodes[0], 40); !strings.Contains(view, "MIXED EPISODE") {
+	if view := m.episodeDetails(m.episodes[0], 40); !strings.Contains(view, "MIXED EPISODE") {
 		t.Errorf("mixed episode not labelled:\n%s", view)
 	}
 }

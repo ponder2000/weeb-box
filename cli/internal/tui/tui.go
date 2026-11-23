@@ -430,17 +430,6 @@ func metaKind(part string) tokenKind {
 	}
 }
 
-// progressBlocks is the compact home progress bar.
-// episodeCount labels how many episodes of the anime have progress.
-func episodeCount(n int) string {
-	if n == 1 {
-		return "1 ep"
-	}
-	return fmt.Sprintf("%d eps", n)
-}
-
-func progressBlocks(ratio float64) string { return progressBar(ratio, 4) }
-
 func progressBar(ratio float64, width int) string {
 	ratio = math.Max(0, math.Min(1, ratio))
 	filled := int(math.Round(ratio * float64(width)))
@@ -589,8 +578,8 @@ type Model struct {
 
 func New(providers []provider.Provider, outDir string, st *store.Store) Model {
 	search := textinput.New()
-	search.Placeholder = "search anime…"
-	search.Prompt = "> "
+	search.Placeholder = "Search anime across your providers…"
+	search.Prompt = "› "
 	search.CharLimit = 100
 	search.Width = 40
 	search.PromptStyle = lipgloss.NewStyle().Foreground(colorAccent)
@@ -696,7 +685,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 		// Cover art is rendered at the previous cell size; draw it again at
 		// the new one. Metadata stays cached.
-		if m.screen == screenResults || m.screen == screenBrowse {
+		switch m.screen {
+		case screenHome:
+			return m, m.ensureHomeCover()
+		case screenEpisodes:
+			return m, m.ensureEpisodePreview()
+		case screenResults, screenBrowse:
 			return m, m.ensurePreview()
 		}
 		return m, nil
@@ -828,19 +822,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A finished episode is stored at position 0; show it as done and
 			// keep the row aligned with in-progress ones.
 			done := p.Duration > 0 && p.Position <= 0
-			bar, pct, kind := progressBlocks(progressRatio(p)), progressPct(p), tokAccent
+			pct, kind := progressPct(p), tokAccent
 			if done {
-				bar, pct, kind = progressBlocks(1), "done", tokOK
+				pct, kind = "✓ Done", tokOK
+			} else if p.Duration <= 0 {
+				pct = clock(p.Position)
 			}
 			resume[i] = item{
 				title: p.AnimeTitle,
 				desc:  fmt.Sprintf("E%03d · %s · %s / %s", p.EpisodeNumber, progressPct(p), clock(p.Position), clock(p.Duration)),
 				sep:   "  ",
 				tokens: []token{
-					{text: bar, kind: kind, width: 4},
-					{text: pct, kind: kind, width: 4, right: true},
-					{text: fmt.Sprintf("E%03d", p.EpisodeNumber), kind: tokMuted, width: 4, right: true},
-					{text: episodeCount(p.Episodes), kind: tokMuted, width: 5, right: true},
+					{text: fmt.Sprintf("E%03d", p.EpisodeNumber), kind: tokMuted, width: 5, right: true},
+					{text: pct, kind: kind, width: 7, right: true},
 				},
 				progress: p,
 			}
@@ -858,6 +852,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resume.Select(0)
 		m.recent.SetItems(recent)
 		m.recent.Select(0)
+		if m.screen == screenHome {
+			return m, m.ensureHomeCover()
+		}
 		return m, nil
 
 	case searchMsg:
@@ -888,8 +885,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.metaCache[msg.key] = msg.info
 		var cmds []tea.Cmd
-		// Only the results and browse screens draw a cover.
-		if m.screen == screenResults || m.screen == screenBrowse {
+		switch m.screen {
+		case screenHome:
+			cmds = append(cmds, m.ensureHomeCover())
+		case screenEpisodes:
+			if msg.key == metadata.Key(m.anime.Title) {
+				cmds = append(cmds, m.ensureEpisodePreview())
+			}
+		case screenResults, screenBrowse:
 			cmds = append(cmds, m.ensureCover(msg.info))
 		}
 		// The filler site indexes English titles; providers decorate theirs, so
@@ -908,11 +911,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case coverMsg:
 		delete(m.coverLoading, msg.key)
-		cols, rows := m.previewCoverSize()
+		cols, rows := m.activeCoverSize()
 		if msg.cols != cols || msg.rows != rows {
 			// The terminal changed size while this render was in flight;
 			// redraw at the current size instead of showing squashed art.
-			return m, m.ensurePreview()
+			switch m.screen {
+			case screenHome:
+				return m, m.ensureHomeCover()
+			case screenEpisodes:
+				return m, m.ensureEpisodePreview()
+			case screenResults, screenBrowse:
+				return m, m.ensurePreview()
+			}
+			return m, nil
 		}
 		if msg.err == nil && msg.art != "" {
 			m.coverArt[msg.key] = coverArtEntry{art: msg.art, cols: cols, rows: rows}
@@ -941,6 +952,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 			m.screen = m.coverReturn
+			if m.screen == screenEpisodes {
+				m.layout()
+				return m, m.ensureEpisodePreview()
+			}
 			return m, nil
 		}
 		path := msg.path
@@ -955,9 +970,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = m.coverReturn
 		if msg.err != nil {
 			m.err = msg.err
-			return m, nil
+		} else {
+			m.status = "Cover closed"
 		}
-		m.status = "Cover closed"
+		if m.screen == screenEpisodes {
+			m.layout()
+			return m, m.ensureEpisodePreview()
+		}
 		return m, nil
 
 	case browseMsg:
@@ -965,14 +984,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.browseLoad = false
+		browseHelp := m.screen == screenHelp && m.helpReturn == screenBrowse
+		if m.screen != screenBrowse && !browseHelp {
+			return m, nil
+		}
 		m.browsePage = msg.page
 		if msg.err != nil {
-			m.screen, m.err = screenGenres, msg.err
+			m.err = msg.err
+			if browseHelp {
+				m.helpReturn = screenGenres
+			} else {
+				m.screen = screenGenres
+			}
 			return m, nil
 		}
 		if len(msg.items) == 0 {
 			m.main.SetItems(nil)
-			m.screen, m.err, m.status = screenBrowse, nil, "no more titles"
+			m.err, m.status = nil, "no more titles"
 			m.layout()
 			return m, nil
 		}
@@ -983,7 +1011,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.main.SetItems(items)
 		m.main.Select(0)
-		m.screen, m.err, m.status = screenBrowse, nil, ""
+		m.err, m.status = nil, ""
 		m.layout()
 		return m, m.ensurePreview()
 
@@ -1000,19 +1028,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.episodes = msg.episodes
 		m.progressByURL = msg.progress
 		m.downloadsByNum = msg.downloads
+		m.fillerKinds = map[int]filler.Kind{}
 		m.main.SetItems(m.episodeItems())
 		m.main.Select(0)
-		m.fillerKinds = map[int]filler.Kind{}
 		m.fillerTitle = m.anime.Title
 		m.fillerLoading = true
 		m.screen, m.err, m.status = screenEpisodes, nil, ""
 		m.layout()
-		return m, tea.Batch(m.ensureMeta(m.anime.Title), fillerCmd(m.st, m.anime.Title), m.ensureVariants())
+		return m, tea.Batch(m.ensureEpisodePreview(), fillerCmd(m.st, m.anime.Title), m.ensureVariants())
 
 	case libraryMsg:
 		m.libraryLoading = false
-		if msg.err != nil {
-			m.err = msg.err
+		if m.screen != screenLibrary && !(m.screen == screenHelp && m.helpReturn == screenLibrary) {
+			return m, nil
 		}
 		m.libraryFiles = msg.files
 		m.localProgress = msg.progress
@@ -1036,7 +1064,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.main.SetItems(items)
 		m.main.Select(0)
-		m.screen, m.err, m.status = screenLibrary, nil, ""
+		m.err, m.status = msg.err, ""
 		m.layout()
 		return m, nil
 
@@ -1051,6 +1079,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.screen, m.err, m.status = m.playReturn, msg.err, ""
+			if m.screen == screenEpisodes {
+				m.layout()
+			}
 			return m, nil
 		}
 		if msg.provider != nil {
@@ -1065,6 +1096,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			m.screen = m.playReturn
 			m.err = err
+			if m.screen == screenEpisodes {
+				m.layout()
+			}
 			return m, nil
 		}
 		return m.playWith(player, playbackInfo{
@@ -1089,6 +1123,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.player = nil
 		}
 		m.screen = m.playReturn
+		// Keep the catalog in sync with the position the playback poller saved.
+		if m.screen == screenEpisodes {
+			m.updateEpisodeProgress(finished && code == 0 && msg.err == nil)
+		}
 		switch {
 		case code == media.ExitNext || code == media.ExitPrev:
 			step := 1
@@ -1121,6 +1159,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.playReturn == screenLibrary {
 			m.screen, m.libraryLoading = screenLibrary, true
 			return m, tea.Batch(m.spinner.Tick, libraryCmd(m.libraryDir, m.st))
+		}
+		if m.screen == screenEpisodes {
+			m.layout()
 		}
 		return m, nil
 
@@ -1219,6 +1260,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == "ctrl+h" || (key == "?" && !(m.screen == screenHome && m.focus == focusSearch)) {
 		if m.screen == screenHelp {
 			m.screen = m.helpReturn
+			m.layout()
+			if m.screen == screenEpisodes {
+				return m, m.ensureEpisodePreview()
+			}
 		} else {
 			m.helpReturn = m.screen
 			m.screen = screenHelp
@@ -1369,6 +1414,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.screen = screenHome
 			}
 			m.layout()
+			if m.screen == screenEpisodes {
+				return m, m.ensureEpisodePreview()
+			}
 			return m, nil
 		case "x":
 			if m.downloading {
@@ -1567,6 +1615,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "left", "backspace":
 			m.screen = m.playReturn
 			m.layout()
+			if m.screen == screenEpisodes {
+				return m, m.ensureEpisodePreview()
+			}
 		case "]", "n":
 			return m.skipEpisode(media.ExitNext)
 		case "[", "p":
@@ -1579,12 +1630,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "enter", "left", "backspace":
 			m.screen, m.err = m.coverReturn, nil
 			m.layout()
+			if m.screen == screenEpisodes {
+				return m, m.ensureEpisodePreview()
+			}
 		}
 		return m, nil
 
 	case screenHelp:
 		if key == "esc" || key == "left" || key == "backspace" {
 			m.screen = m.helpReturn
+			if m.screen == screenEpisodes {
+				m.layout()
+				return m, m.ensureEpisodePreview()
+			}
 		}
 		return m, nil
 	}
@@ -1698,6 +1756,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "tab", "down":
 			switch {
 			case len(m.resume.Items()) > 0:
+				m.resume.Select(m.featuredIndex())
 				m.focus = focusResume
 			case len(m.recent.Items()) > 0:
 				m.focus = focusRecent
@@ -1705,7 +1764,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.search.Blur()
-			return m, nil
+			return m, m.ensureHomeCover()
 		}
 		var cmd tea.Cmd
 		m.search, cmd = m.search.Update(msg)
@@ -1731,17 +1790,17 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			removeListRow(&m.resume)
 			m.status = "Removed from continue watching"
-			return m, nil
+			return m, m.ensureHomeCover()
 		case "esc", "/", "left", "backspace":
 			m.focus = focusSearch
-			return m, m.search.Focus()
+			return m, tea.Batch(m.search.Focus(), m.ensureHomeCover())
 		case "tab":
 			if len(m.recent.Items()) > 0 {
 				m.focus = focusRecent
-				return m, nil
+				return m, m.ensureHomeCover()
 			}
 			m.focus = focusSearch
-			return m, m.search.Focus()
+			return m, tea.Batch(m.search.Focus(), m.ensureHomeCover())
 		case "enter":
 			selected, ok := m.resume.SelectedItem().(item)
 			if !ok {
@@ -1771,7 +1830,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.resume, cmd = m.resume.Update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, m.ensureHomeCover())
 
 	case focusRecent:
 		switch key {
@@ -1900,7 +1959,12 @@ func (m Model) cycleScreen() (tea.Model, tea.Cmd) {
 			break
 		}
 	}
-	switch screens[(index+1)%len(screens)] {
+	return m.openMainScreen(screens[(index+1)%len(screens)])
+}
+
+func (m Model) openMainScreen(target screen) (tea.Model, tea.Cmd) {
+	m.lastClickKey = ""
+	switch target {
 	case screenHome:
 		return m.goHome()
 	case screenPlaying:
@@ -2044,7 +2108,7 @@ func (m *Model) ensureCover(info metadata.Info) tea.Cmd {
 		return nil
 	}
 	key := metadata.Key(info.Title)
-	cols, rows := m.previewCoverSize()
+	cols, rows := m.activeCoverSize()
 	if entry, ok := m.coverArt[key]; ok && entry.cols == cols && entry.rows == rows {
 		return nil
 	}
@@ -2268,15 +2332,20 @@ func (m Model) leftMargin() int {
 	return max(0, (m.width-m.viewWidth())/2)
 }
 
-// bodyOffset mirrors View: header, one blank row, then vertical padding before
-// the centered body. Mouse coordinates are absolute terminal cells.
+func (m Model) bodyStart() int {
+	return 1 + lipgloss.Height(m.header()) + 1 // Top border and navigation.
+}
+
+func (m Model) bodyHeight() int {
+	return max(0, m.height-m.bodyStart()-2) // Activity row and bottom border.
+}
+
+func (m Model) bodyPadding(body string) int {
+	return max(0, m.bodyHeight()-lipgloss.Height(body)) / 2
+}
+
 func (m Model) bodyOffset() int {
-	header := m.header()
-	footer := m.footer()
-	body := m.bodyView()
-	inner := max(0, m.height-lipgloss.Height(header)-lipgloss.Height(footer)-3)
-	pad := max(0, (inner-lipgloss.Height(body))/2)
-	return lipgloss.Height(header) + 2 + pad
+	return m.bodyStart() + m.bodyPadding(m.bodyView())
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -2284,10 +2353,25 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		return m.scrollMouse(msg.X, msg.Y, -1), nil
-	case tea.MouseButtonWheelDown:
-		return m.scrollMouse(msg.X, msg.Y, 1), nil
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		delta := 1
+		if msg.Button == tea.MouseButtonWheelUp {
+			delta = -1
+		}
+		index, resumeIndex := m.main.Index(), m.resume.Index()
+		m = m.scrollMouse(msg.X, msg.Y, delta)
+		if m.screen == screenHome && m.resume.Index() != resumeIndex {
+			return m, m.ensureHomeCover()
+		}
+		if m.main.Index() != index {
+			switch m.screen {
+			case screenResults, screenBrowse:
+				return m, m.ensurePreview()
+			case screenEpisodes:
+				return m, m.ensureVariants()
+			}
+		}
+		return m, nil
 	case tea.MouseButtonLeft:
 		return m.clickMouse(msg.X, msg.Y)
 	}
@@ -2302,22 +2386,23 @@ func (m Model) scrollMouse(x, y, delta int) Model {
 	bx := x - left
 	switch m.screen {
 	case screenHome:
-		tagline := 0
-		if m.height >= 28 {
-			tagline = 1
-		}
-		if y < m.bodyOffset()+8+tagline {
+		row := y - m.bodyOffset() - m.homeHistoryTop()
+		if row < 0 {
 			return m
 		}
-		half := (m.viewWidth() - 2) / 2
+		half := m.homeHistoryWidth()
 		switch {
-		case bx < half:
+		case bx < half && row < m.resume.Paginator.ItemsOnPage(len(m.resume.Items())):
+			m.search.Blur()
+			m.focus = focusResume
 			if delta < 0 {
 				m.resume.CursorUp()
 			} else {
 				m.resume.CursorDown()
 			}
-		case bx >= half+2:
+		case bx >= half+2 && row < m.recent.Paginator.ItemsOnPage(len(m.recent.Items())):
+			m.search.Blur()
+			m.focus = focusRecent
 			if delta < 0 {
 				m.recent.CursorUp()
 			} else {
@@ -2341,7 +2426,7 @@ func (m Model) scrollMouse(x, y, delta int) Model {
 			}
 		}
 	case screenEpisodes:
-		if y >= m.bodyOffset() && bx < m.viewWidth()*56/100 {
+		if m.episodeCatalogHit(bx, y-m.bodyOffset()) {
 			if delta < 0 {
 				m.main.CursorUp()
 			} else {
@@ -2372,7 +2457,23 @@ func (m Model) clickMouse(x, y int) (tea.Model, tea.Cmd) {
 	if x < left || x >= left+m.viewWidth() {
 		return m, nil
 	}
-	bx, by := x-left, y-m.bodyOffset()
+	bx := x - left
+	if y == m.bodyStart()-1 {
+		for _, tab := range m.navigation() {
+			if bx < lipgloss.Width(tab.label) {
+				if tab.target != m.screen {
+					return m.openMainScreen(tab.target)
+				}
+				return m, nil
+			}
+			bx -= lipgloss.Width(tab.label) + 1
+			if bx < 0 {
+				break
+			}
+		}
+		return m, nil
+	}
+	by := y - m.bodyOffset()
 	if by < 0 {
 		return m, nil
 	}
@@ -2430,20 +2531,22 @@ func (m Model) goHome() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) clickHome(bx, by int) (tea.Model, tea.Cmd) {
-	tagline := 0
-	if m.height >= 28 {
-		tagline = 1
-	}
-	searchTop := 4 + tagline
-	if by >= searchTop && by < searchTop+3 {
+	if by == 0 {
+		m.lastClickKey = ""
 		m.focus = focusSearch
-		return m, m.search.Focus()
+		return m, tea.Batch(m.search.Focus(), m.ensureHomeCover())
 	}
-	panelsTop := 8 + tagline
-	if by < panelsTop {
+	if by == 2+m.homeHeroHeight()-2 && bx >= 2 && bx < 2+lipgloss.Width(m.homeResumeButton()) && len(m.resume.Items()) > 0 {
+		m.resume.Select(m.featuredIndex())
+		m.focus = focusResume
+		m.search.Blur()
+		return m.handleHomeKey(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	listTop := m.homeHistoryTop()
+	if by < listTop || by >= listTop+m.resume.Height() {
 		return m, nil
 	}
-	half := (m.viewWidth() - 2) / 2
+	half := m.homeHistoryWidth()
 	var target *list.Model
 	var targetFocus focus
 	switch {
@@ -2455,56 +2558,23 @@ func (m Model) clickHome(bx, by int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.search.Blur()
+	if m.focus != targetFocus {
+		m.lastClickKey = ""
+	}
 	m.focus = targetFocus
-	if by < panelsTop+2 {
-		return m, nil
+	cmd := m.clickListRows(target, by, listTop, screenHome, 1)
+	if m.screen == screenHome {
+		return m, tea.Batch(cmd, m.ensureHomeCover())
 	}
-	rows := 1
-	if targetFocus == focusResume {
-		rows = 2
-	}
-	cmd := m.clickListRows(target, by, panelsTop+2, screenHome, rows)
 	return m, cmd
-}
-
-func (m Model) clickEpisodes(bx, by int) (tea.Model, tea.Cmd) {
-	content := m.viewWidth()
-	leftOuter := content * 56 / 100
-	if bx < leftOuter {
-		cmd := m.clickList(&m.main, by, 4, screenEpisodes)
-		return m, cmd
-	}
-	if bx < leftOuter+2 {
-		return m, nil
-	}
-	selected, ok := m.main.SelectedItem().(item)
-	if !ok || selected.episode.Number == 0 {
-		return m, nil
-	}
-	width := max(20, content-leftOuter-2-4)
-	for i, line := range strings.Split(m.detailView(selected.episode, width), "\n") {
-		if by != 4+i {
-			continue
-		}
-		switch {
-		case strings.Contains(line, "Play online"):
-			return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
-		case strings.Contains(line, "Download episode"):
-			return m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-		case strings.Contains(line, "Download from here"):
-			return m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-		}
-	}
-	return m, nil
 }
 
 func (m *Model) clickList(target *list.Model, by, listStart int, on screen) tea.Cmd {
 	return m.clickListRows(target, by, listStart, on, 2)
 }
 
-// clickListRows is clickList for lists whose delegate row height is not the
-// default two lines (the home lists are one line per item). target points into
-// the receiver, so selecting and activation mutate m in place.
+// clickListRows also supports the one-line recent searches list. target
+// points into the receiver, so selection and activation mutate m in place.
 func (m *Model) clickListRows(target *list.Model, by, listStart int, on screen, rowHeight int) tea.Cmd {
 	index := listIndexRows(*target, by-listStart, rowHeight)
 	if index < 0 {
@@ -2750,6 +2820,7 @@ func (m Model) startLocalPlayback(file lib.File) (tea.Model, tea.Cmd) {
 
 func (m Model) openLibrary() (tea.Model, tea.Cmd) {
 	m.screen, m.libraryLoading, m.err, m.status = screenLibrary, true, nil, ""
+	m.main.SetItems(nil)
 	return m, tea.Batch(m.spinner.Tick, libraryCmd(m.libraryDir, m.st))
 }
 
@@ -2805,13 +2876,11 @@ func (m Model) View() string {
 	header := m.header()
 	footer := m.footer()
 	body := m.bodyView()
-	// Keep the chrome at the window edges and center the screen body in the
-	// space between them. Place is a no-op when the body is taller than that.
-	rule := faintStyle.Render(strings.Repeat("─", m.viewWidth()))
-	innerHeight := max(0, m.height-lipgloss.Height(header)-lipgloss.Height(footer)-3)
-	body = lipgloss.Place(m.viewWidth(), innerHeight, lipgloss.Center, lipgloss.Center, body)
-	view := lipgloss.JoinVertical(lipgloss.Left, header, rule, "", body, "", footer)
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, view)
+	body = strings.Repeat("\n", m.bodyPadding(body)) + body
+	body = lipgloss.Place(m.viewWidth(), m.bodyHeight(), lipgloss.Left, lipgloss.Top, body)
+	view := lipgloss.JoinVertical(lipgloss.Left, header, m.navView(), body, footer)
+	frame := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorMuted).Padding(0, 1)
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, frame.Render(view))
 }
 
 func (m Model) bodyView() string {
@@ -2862,9 +2931,68 @@ func (m Model) header() string {
 		left += "  " + dimStyle.Render(m.screenName())
 	}
 	left += "  " + m.creatorLink()
-	right := lipgloss.JoinHorizontal(lipgloss.Center, pill(m.providerLabel()), " ", pill("v1"))
+	right := pill(m.providerLabel())
+	if m.width >= 100 {
+		left += faintStyle.Render("  /  WATCH DESK")
+	}
+	if lipgloss.Width(left)+1+lipgloss.Width(right) > m.viewWidth() {
+		return left
+	}
 	gap := max(1, m.viewWidth()-lipgloss.Width(left)-lipgloss.Width(right))
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, strings.Repeat(" ", gap), right)
+}
+
+type navTab struct {
+	target screen
+	label  string
+}
+
+func (m Model) navigation() []navTab {
+	if m.screen == screenBusy || m.screen == screenSetup || m.screen == screenCover || m.dirEditing {
+		return nil
+	}
+	current := m.screen
+	switch current {
+	case screenResults, screenEpisodes:
+		current = screenHome
+	case screenBrowse:
+		current = screenGenres
+	}
+	labels := map[screen]string{
+		screenHome: "Home", screenPlaying: "Playing", screenGenres: "Browse", screenLibrary: "Library",
+		screenDownloads: "Queue", screenProviders: "Providers", screenStats: "Stats", screenSettings: "Settings",
+	}
+	width := 0
+	var tabs []navTab
+	for _, target := range m.mainScreens() {
+		label := labels[target]
+		if target == screenDownloads && m.downloading {
+			label += " ↓"
+		}
+		active := target == current
+		if active {
+			label = titleStyle.Background(colorKeyBg).Render("[" + label + "]")
+		} else {
+			label = dimStyle.Render(" " + label + " ")
+		}
+		width += lipgloss.Width(label) + 1
+		tabs = append(tabs, navTab{target, label})
+	}
+	if width-1 > m.viewWidth() {
+		return nil
+	}
+	return tabs
+}
+
+func (m Model) navView() string {
+	var labels []string
+	for _, tab := range m.navigation() {
+		labels = append(labels, tab.label)
+	}
+	if len(labels) == 0 {
+		return faintStyle.Render(strings.Repeat("─", m.viewWidth()))
+	}
+	return strings.Join(labels, " ")
 }
 
 func (m Model) providerName() string {
@@ -2916,6 +3044,8 @@ func (m Model) screenName() string {
 		return "settings"
 	case screenCover:
 		return "cover"
+	case screenStats:
+		return "stats"
 	default:
 		return ""
 	}
@@ -2970,23 +3100,63 @@ func (m Model) footer() string {
 	if m.screen != screenBusy && m.screen != screenHelp && m.screen != screenSetup && m.screen != screenCover && !(m.screen == screenSettings && m.dirEditing) {
 		items = append(items, hint("⇧tab", "screens"))
 	}
-	sep := dimStyle.Render("  ·  ")
-	fixed := ""
 	if m.screen != screenSettings && m.screen != screenBusy {
-		fixed = hint("ctrl+o", "settings")
+		items = append(items, hint("ctrl+o", "settings"))
 	}
-	avail := m.viewWidth()
-	if fixed != "" {
-		avail -= lipgloss.Width(fixed) + lipgloss.Width(sep)
+	activity := m.downloadActivity()
+	remaining := m.viewWidth() - lipgloss.Width(activity)
+	sep := dimStyle.Render("  ·  ")
+	var hints []string
+	for _, item := range items {
+		width := lipgloss.Width(item)
+		if len(hints) > 0 {
+			width += lipgloss.Width(sep)
+		}
+		if remaining-width >= 3 {
+			hints = append(hints, item)
+			remaining -= width
+		}
 	}
-	for len(items) > 1 && lipgloss.Width(strings.Join(items, sep)) > avail {
-		items = items[:len(items)-1]
+	if len(hints) == 0 {
+		return activity
 	}
-	out := strings.Join(items, sep)
-	if fixed != "" {
-		out += sep + fixed
+	return activity + strings.Repeat(" ", remaining) + strings.Join(hints, sep)
+}
+
+func (m Model) downloadActivity() string {
+	text, style := "↓ Download idle", dimStyle
+	switch {
+	case m.downloading:
+		text, style = "↓ Finishing…", titleStyle
+		for _, q := range m.queue {
+			if q.state == qActive {
+				rate := "— B/s"
+				if q.rate > 0 {
+					rate = humanBytes(int64(q.rate)) + "/s"
+				}
+				progress := fmt.Sprintf("↓ E%03d %.0f%%", q.episode.Number, q.percent*100)
+				text = progress + " · " + rate
+				if runewidth.StringWidth(text) > m.viewWidth() {
+					text = progress + " " + rate
+				}
+				break
+			}
+			if q.state == qQueued {
+				text = fmt.Sprintf("↓ E%03d queued", q.episode.Number)
+				break
+			}
+		}
+	case len(m.cancelled) > 0:
+		text = "✕ Download cancelled"
+	case m.lastFailed != nil:
+		text, style = fmt.Sprintf("✕ E%03d failed", m.lastFailed.Number), errStyle
+	case len(m.queue) > 0:
+		last := m.queue[len(m.queue)-1].state
+		if last == qDone || last == qSkipped {
+			text, style = "✓ Download complete", okStyle
+		}
 	}
-	return out
+	return style.Render(runewidth.Truncate(text, m.viewWidth(), "…"))
 }
 
 func (m Model) creatorLink() string {
@@ -2999,7 +3169,7 @@ func (m Model) creatorLink() string {
 
 // creatorHit reports whether an absolute terminal cell is on the header credit.
 func (m Model) creatorHit(x, y int) bool {
-	if y != 0 {
+	if y != 1 {
 		return false
 	}
 	prefix := "weeb-box"
@@ -3009,67 +3179,6 @@ func (m Model) creatorHit(x, y int) bool {
 	prefix += "  "
 	start := m.leftMargin() + lipgloss.Width(prefix)
 	return x >= start && x < start+lipgloss.Width(m.creatorLink())
-}
-
-func (m Model) homeView() string {
-	content := m.viewWidth()
-	half := (content - 2) / 2
-	inner := max(18, half-4)
-
-	logo := titleStyle.Render(`╦ ╦╔═╗╔═╗╔╗ ╔╦╗╔═╗═╗ ╦
-║║║║╣ ║╣ ╠╩╗ ║║║ ║╔╩╦╝
-╚╩╝╚═╝╚═╝╚═╝═╩╝╚═╝╩ ╚═`)
-	tagline := dimStyle.Render("anime, without the pop-ups") + faintStyle.Render("  ·  search / stream / download / library")
-
-	searchStyleShell := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorLine).
-		Padding(0, 1).
-		Width(content - 4)
-	if m.focus == focusSearch {
-		searchStyleShell = searchStyleShell.BorderForeground(colorAccent)
-	}
-	searchBox := searchStyleShell.Render(m.search.View())
-
-	resumeBody := m.resume.View()
-	if len(m.resume.Items()) == 0 {
-		resumeBody = dimStyle.Render("Nothing in progress yet")
-	}
-	recentBody := m.recent.View()
-	if len(m.recent.Items()) == 0 {
-		recentBody = dimStyle.Render("No searches yet")
-	}
-	// Keep the two panels level when only one list has rows.
-	if h := max(lipgloss.Height(resumeBody), lipgloss.Height(recentBody)); h > 1 {
-		resumeBody, recentBody = padLines(resumeBody, h), padLines(recentBody, h)
-	}
-	left := panel("Continue watching", resumeBody, inner, m.focus == focusResume)
-	right := panel("Recent searches", recentBody, inner, m.focus == focusRecent)
-
-	filesLabel := fmt.Sprintf("%d files", m.stats.Downloads)
-	if m.stats.Downloads == 1 {
-		filesLabel = "1 file"
-	}
-	stats := dimStyle.Render("library ") +
-		lipgloss.NewStyle().Foreground(colorText).Render(filesLabel) +
-		dimStyle.Render("  ·  ") + lipgloss.NewStyle().Foreground(colorText).Render(humanBytes(m.stats.Bytes)) +
-		dimStyle.Render("  ·  ") + lipgloss.NewStyle().Foreground(colorText).Render(fmt.Sprintf("%d watched", m.stats.Watched))
-	parts := []string{logo}
-	if m.height >= 28 {
-		parts = append(parts, tagline)
-	}
-	parts = append(parts,
-		"",
-		searchBox,
-		"",
-		lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right),
-	)
-	// The status line under the body needs a row; drop the stats line rather
-	// than push the header off-screen on short terminals.
-	if m.height >= 28 || (m.status == "" && m.err == nil) {
-		parts = append(parts, "", stats)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m Model) resultsView() string {
@@ -3110,6 +3219,16 @@ func (m Model) previewSplit() bool {
 // panel. One cell is one pixel column and two pixel rows, so a 2:3 cover wants
 // rows ≈ cols*3/4. The height cap mirrors layout(): the panel body is
 // m.height-13 rows and the art leaves five lines for title, rating and tags.
+func (m Model) activeCoverSize() (cols, rows int) {
+	switch m.screen {
+	case screenHome:
+		return m.homeCoverSize()
+	case screenEpisodes:
+		return m.episodeCoverSize()
+	}
+	return m.previewCoverSize()
+}
+
 func (m Model) previewCoverSize() (cols, rows int) {
 	switch {
 	case m.width >= 120:
@@ -3254,15 +3373,11 @@ func (m Model) coverView() string {
 	)
 }
 
-// episodeItems renders the episode list with downloaded, in-progress, and
-// finished badges.
+// episodeItems builds catalog items; the first token is the status column.
 func (m Model) episodeItems() []list.Item {
 	items := make([]list.Item, len(m.episodes))
 	for i, ep := range m.episodes {
-		var tokens []token
-		if ep.Title != "" {
-			tokens = append(tokens, token{text: ep.Title, kind: tokText})
-		}
+		tokens := []token{episodeState(m.progressByURL[ep.URL])}
 		if _, ok := m.downloadsByNum[ep.Number]; ok {
 			tokens = append(tokens, token{text: "downloaded", kind: tokOK})
 		}
@@ -3271,14 +3386,6 @@ func (m Model) episodeItems() []list.Item {
 			tokens = append(tokens, token{text: "filler", kind: tokWarn})
 		case filler.Mixed:
 			tokens = append(tokens, token{text: "mixed", kind: tokMuted})
-		}
-		if p, ok := m.progressByURL[ep.URL]; ok {
-			switch {
-			case p.Position > 0:
-				tokens = append(tokens, token{text: progressPct(p) + " watched", kind: tokAccent})
-			case p.Duration > 0:
-				tokens = append(tokens, token{text: "done", kind: tokOK})
-			}
 		}
 		parts := make([]string, len(tokens))
 		for j, t := range tokens {
@@ -3304,7 +3411,8 @@ func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
 	ep := selected.episode
 	ctx := context.Background()
 	index := m.main.Index()
-	if p, known := m.progressByURL[ep.URL]; known && (p.Position > 0 || p.Duration > 0) {
+	p := m.progressByURL[ep.URL]
+	if p.Position == 0 && p.Duration > 0 {
 		if err := m.st.DeleteProgressForEpisode(ctx, m.providerName(), ep.URL); err != nil {
 			m.err = err
 			return m, nil
@@ -3312,19 +3420,21 @@ func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
 		delete(m.progressByURL, ep.URL)
 		m.status = fmt.Sprintf("E%03d marked unwatched", ep.Number)
 	} else {
-		// A one-second duration means finished: the home screen reads
-		// position 0 with a duration as done, without a player having run.
+		// Position zero with any duration marks an episode done without playback.
 		rec := store.Progress{
 			Provider:      m.providerName(),
 			EpisodeURL:    ep.URL,
 			AnimeURL:      m.anime.URL,
 			AnimeTitle:    m.anime.Title,
 			EpisodeNumber: ep.Number,
-			Duration:      1,
+			Duration:      max(1, p.Duration),
 		}
 		if err := m.st.SaveProgress(ctx, rec); err != nil {
 			m.err = err
 			return m, nil
+		}
+		if m.progressByURL == nil {
+			m.progressByURL = map[string]store.Progress{}
 		}
 		m.progressByURL[ep.URL] = rec
 		m.status = fmt.Sprintf("E%03d marked watched", ep.Number)
@@ -3332,86 +3442,6 @@ func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
 	m.main.SetItems(m.episodeItems())
 	m.main.Select(index)
 	return m, nil
-}
-
-func (m Model) episodesView() string {
-	content := m.viewWidth()
-	leftOuter := content * 56 / 100
-	rightOuter := content - leftOuter - 2
-	leftInner := max(20, leftOuter-4)
-	rightInner := max(20, rightOuter-4)
-
-	body := m.main.View()
-	if len(m.main.Items()) == 0 {
-		body = dimStyle.Render("No episodes")
-	}
-	selected, _ := m.main.SelectedItem().(item)
-	detail := m.detailView(selected.episode, rightInner)
-	return lipgloss.JoinVertical(lipgloss.Left,
-		m.crumbs("Home", "search", m.anime.Title),
-		"",
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			panel("Episodes", body, leftInner, true),
-			"  ",
-			panel("Episode", detail, rightInner, false),
-		),
-	)
-}
-
-func (m Model) detailView(ep provider.Episode, width int) string {
-	if ep.Number == 0 {
-		return dimStyle.Render("Select an episode")
-	}
-	var lines []string
-	lines = append(lines, dimStyle.Render(fmt.Sprintf("EPISODE %03d", ep.Number)))
-	title := ep.Title
-	if title == "" {
-		title = fmt.Sprintf("Episode %d", ep.Number)
-	}
-	lines = append(lines, lipgloss.NewStyle().Foreground(colorText).MaxWidth(width-2).Render(title))
-	lines = append(lines, dimStyle.MaxWidth(width-2).Render(m.anime.Title))
-	if info, ok := m.metaCache[metadata.Key(m.anime.Title)]; ok {
-		meta := ratingBadge(info)
-		if len(info.Genres) > 0 {
-			meta += " · " + strings.Join(info.Genres, ", ")
-		}
-		lines = append(lines, dimStyle.MaxWidth(width-2).Render(meta))
-		if len(info.Tags) > 0 {
-			lines = append(lines, faintStyle.MaxWidth(width-2).Render(strings.Join(info.Tags[:min(4, len(info.Tags))], " · ")))
-		}
-		if info.Duration > 0 {
-			lines = append(lines, dimStyle.Render(fmt.Sprintf("%dm per episode", info.Duration)))
-		}
-	}
-	lines = append(lines, "")
-
-	if p, ok := m.progressByURL[ep.URL]; ok && p.Position > 0 {
-		lines = append(lines, faintStyle.Render("Watch progress"))
-		lines = append(lines, bar(progressRatio(p), max(10, width-4)))
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("%s · resume at %s", progressPct(p), clock(p.Position))))
-		lines = append(lines, "")
-	}
-	if kind, ok := m.fillerKinds[ep.Number]; ok && kind != filler.Canon {
-		lines = append(lines, lipgloss.NewStyle().Foreground(colorWarn).Render(strings.ToUpper(string(kind))+" EPISODE"))
-		lines = append(lines, "")
-	}
-	if list, ok := m.variantsByURL[ep.URL]; ok {
-		if len(list) > 0 {
-			lines = append(lines, dimStyle.Render("quality "+strings.Join(list, " · ")))
-		}
-	} else if m.variantLoading[ep.URL] {
-		lines = append(lines, faintStyle.Render("checking quality…"))
-	}
-	if _, ok := m.downloadsByNum[ep.Number]; ok {
-		lines = append(lines, okStyle.Render("✓ downloaded"))
-		lines = append(lines, "")
-	}
-	lines = append(lines,
-		action("enter", "Play online", "mpv · resume", width),
-		action("d", "Download episode", "HLS", width),
-		action("a", "Download from here", "to the end", width),
-	)
-	return strings.Join(lines, "\n")
 }
 
 func (m Model) setupView() string {
@@ -3804,38 +3834,39 @@ func (m Model) crumbs(parts ...string) string {
 
 func (m Model) viewWidth() int {
 	if m.width <= 0 {
-		return 80
+		return 76
 	}
-	return max(20, min(m.width-4, 110))
+	return max(20, min(m.width-4, 132))
 }
 
 func (m *Model) layout() {
 	content := m.viewWidth()
 	m.search.Width = max(10, content-8)
-	halfInner := max(18, (content-2)/2-4)
-	// Mirror homeView: logo, optional tagline, search box, panels, optional
-	// stats, and the status row all share the body area.
-	taglineRows := 0
-	if m.height >= 28 {
-		taglineRows = 1
+	historyWidth := m.homeHistoryWidth()
+	extra := 0
+	if m.height >= 30 {
+		extra = 2
 	}
-	statsRows := 0
-	if m.height >= 28 || (m.status == "" && m.err == nil) {
-		statsRows = 2
-	}
-	statusRows := 0
-	if m.err != nil || m.status != "" {
-		statusRows = 1
-	}
-	homeRows := max(1, m.height-17-taglineRows-statsRows-statusRows)
-	m.resume.SetSize(max(18, halfInner-2), homeRows)
-	m.recent.SetSize(max(18, halfInner-2), homeRows)
+	homeRows := max(1, m.height-m.homeHistoryTop()-6-extra)
+	m.resume.SetSize(historyWidth, homeRows)
+	m.recent.SetSize(content-historyWidth-2, homeRows)
 	if m.screen == screenEpisodes {
-		leftInner := max(20, content*56/100-4)
-		// Panels wrap their body at width-2 (they pad by one column); keep
-		// list lines inside that so long titles cannot add rows.
-		m.main.SetSize(max(20, leftInner-2), max(5, m.height-13))
-	} else if m.screen == screenResults && m.previewSplit() {
+		if m.main.ShowPagination() {
+			m.main.SetDelegate(episodeDelegate{})
+			m.main.SetShowPagination(false)
+		}
+		reserve := m.episodeRowsTop()
+		if m.episodeWide() {
+			reserve += 4 // Selected title, actions, progress, and episode details.
+		}
+		m.main.SetSize(m.episodeCatalogWidth(), max(1, m.episodeBodyHeight()-reserve))
+		return
+	}
+	if !m.main.ShowPagination() {
+		m.main.SetDelegate(newThemedDelegate(m.scroll))
+		m.main.SetShowPagination(true)
+	}
+	if (m.screen == screenResults || m.screen == screenBrowse) && m.previewSplit() {
 		m.main.SetSize(max(20, m.resultsLeftOuter()-6), max(5, m.height-13))
 	} else {
 		m.main.SetSize(max(20, content-6), max(5, m.height-13))
@@ -3862,6 +3893,10 @@ func pill(text string) string {
 		Render(text)
 }
 
+func primaryAction(text string) string {
+	return lipgloss.NewStyle().Bold(true).Foreground(colorKeyBg).Background(colorAccent).Padding(0, 1).Render(text)
+}
+
 func keyline(key, desc string) string {
 	return dimStyle.Render(desc) + "  " + keycap(key)
 }
@@ -3876,14 +3911,6 @@ func keycap(key string) string {
 
 func hint(key, desc string) string {
 	return keycap(key) + " " + dimStyle.Render(desc)
-}
-
-func action(key, what, note string, width int) string {
-	line := keycap(key) + "  " + lipgloss.NewStyle().Foreground(colorText).Render(what)
-	if max(28, lipgloss.Width(line))+len(note) > width-2 {
-		return line
-	}
-	return line + dimStyle.Render(strings.Repeat(" ", max(1, 28-lipgloss.Width(line)))+note)
 }
 
 func bar(ratio float64, width int) string {
@@ -4605,9 +4632,11 @@ func (m *Model) refreshTheme() {
 	m.search.PlaceholderStyle = lipgloss.NewStyle().Foreground(colorFaint)
 	m.spinner.Style = lipgloss.NewStyle().Foreground(colorAccent)
 	delegate := newThemedDelegate(m.scroll)
-	m.resume.SetDelegate(delegate)
+	m.resume.SetDelegate(newCompactDelegate(m.scroll))
 	m.recent.SetDelegate(newCompactDelegate(m.scroll))
-	m.main.SetDelegate(delegate)
+	if m.screen != screenEpisodes {
+		m.main.SetDelegate(delegate)
+	}
 }
 
 type themeSpec struct {

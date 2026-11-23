@@ -21,10 +21,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
           cache: true
       - id: status
-        run: scripts/provider-status.sh
+        run: cli/scripts/provider-status.sh
         continue-on-error: true
       - name: Commit status table
         run: |

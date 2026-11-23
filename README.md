@@ -1,16 +1,24 @@
 # weeb-box
 
-A Go TUI for watching and downloading anime from multiple sources. The home dashboard shows continue-watching, recent searches, and stats. Search a title across every provider, pick a series and source, then stream an episode with mpv/ffplay or download one episode, the rest of the season, or everything from the selected episode on.
+A Go TUI for watching and downloading anime from multiple sources. Watch Desk puts your next episode up front, with watch history and recent searches below it. The episode catalog puts Play/Resume first, shows cover art and series details on wide terminals, and keeps live download activity in the footer. Search across providers, stream with mpv/ffplay, or download episodes to watch offline.
+
+## Repository layout
+
+- [`cli/`](cli/) — the existing Go terminal app, its tests, scripts, assets, and themes.
+- [`app/`](app/) — reserved for a future standalone Flutter GUI for Android, iOS, macOS, Linux, and Windows. Not implemented yet.
+
+For the before/after design study, open [`cli/assets/tui-before-after.html`](cli/assets/tui-before-after.html) in a browser. Run all Go commands on this page from `cli/`.
 
 ## Prerequisites
 
-- Go 1.27.3 or newer to build (see `go.mod`)
+- Go 1.27.3 or newer to build (see [`cli/go.mod`](cli/go.mod))
 - `ffmpeg` and `ffprobe` on `PATH` — downloads and progress
 - `mpv` strongly recommended — on-screen controls, subtitles, and resume. `ffplay` works as a fallback but has only basic keyboard controls and no live progress saving.
 
 ## Run
 
 ```sh
+cd cli
 go run .                                  # default paths
 go run . -dir ~/Videos/anime              # custom download root
 go run . -db /tmp/weeb-box.db             # custom database
@@ -67,7 +75,7 @@ Playback opens mpv in its own window and switches the TUI to a **Now playing** s
 
 For a modern control bar, install [uosc](https://github.com/tomasklaen/uosc) and copy `themes/mpv/uosc.conf` to `~/.config/mpv/script-opts/uosc.conf`. The app auto-detects uosc and disables the built-in OSC; the theme replaces `master.m3u8` with the anime/episode title. Re-copy that config after updating to pick up the CC toggle.
 
-Mouse: wheel scrolls the list under the pointer; click a row to select it, click it again (or double-click) to open/play. On the episode detail panel, clicking Play/Download/Download-from-here runs that action. Terminal text selection may need Shift or Option while mouse reporting is on.
+Mouse: click a top tab to switch screens. The active tab is marked with brackets, and Queue shows a down arrow during downloads. The wheel scrolls the list under the pointer; click a row to select it, then click again (or double-click) to open/play. On the episode detail panel, clicking Play/Download/Download-from-here runs that action. Terminal text selection may need Shift or Option while mouse reporting is on.
 
 The download queue shows percentage, bytes written, ffmpeg speed, and ETA while active, plus the final file size when complete. Long titles auto-scroll horizontally in search results, resume rows, the library, and the download queue; recent-search rows truncate with `…` so their time column stays aligned.
 
@@ -216,7 +224,7 @@ The header shows `(developed by @chotathanos)` as a clickable link to [x.com/cho
 
 The interface uses an IBM Carbon dark palette and looks best in **IBM Plex
 Mono**. A terminal app cannot set its own font, so choose it in your terminal;
-[`themes/README.md`](themes/README.md) has install steps plus ready-made
+[`cli/themes/README.md`](cli/themes/README.md) has install steps plus ready-made
 Alacritty and Kitty color configs.
 
 ## Tests
@@ -240,4 +248,4 @@ CI runs the unit suite on every push and pull request (`.github/workflows/ci.yml
 ## Why not just use the website?
 
 Pop-ups and malicious ads.
-![](assets/bad_website.png)
+![](cli/assets/bad_website.png)

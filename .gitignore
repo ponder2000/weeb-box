@@ -1,6 +1,7 @@
 # Go build output
 bin/
 /weeb-box
+/cli/weeb-box
 
 # Local downloads
 Downloads/
