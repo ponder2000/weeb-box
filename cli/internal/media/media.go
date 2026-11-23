@@ -317,12 +317,13 @@ func mpvArgs(title string, start float64, referer, subFile, socket string) []str
 		"--terminal=no",
 		"--osd-level=1",
 		"--hwdec=auto-safe",
-		// Keep only a short forward window; HLS is fetched on demand.
+		// Forward buffer sized to ride out provider hiccups; doubled after
+		// stalls were still reported at the shorter window.
 		"--cache=yes",
-		"--cache-secs=30",
-		"--demuxer-readahead-secs=15",
-		"--demuxer-max-bytes=48MiB",
-		"--demuxer-max-back-bytes=8MiB",
+		"--cache-secs=60",
+		"--demuxer-readahead-secs=30",
+		"--demuxer-max-bytes=96MiB",
+		"--demuxer-max-back-bytes=16MiB",
 		// Carbon-styled built-in controls unless uosc replaces them.
 		"--osd-font=IBM Plex Mono",
 		"--osd-font-size=32",

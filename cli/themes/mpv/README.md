@@ -8,7 +8,7 @@ a short streaming buffer. It does not download the whole episode for playback.
 The app passes these automatically:
 
 - OSC + keyboard controls, hardware decoding
-- `--cache-secs=30`, `--demuxer-readahead-secs=15`, `--demuxer-max-bytes=48MiB`
+- `--cache-secs=60`, `--demuxer-readahead-secs=30`, `--demuxer-max-bytes=96MiB`
   — roughly 15–30 seconds ahead, not the full file
 - `--sub-file` for the default caption track (English when available)
 - IBM Plex Mono styling for OSD and subtitles
@@ -57,5 +57,5 @@ While mpv is playing:
 The default English track is loaded automatically when the episode has one.
 
 If playback stutters, raise `--cache-secs`/`--demuxer-max-bytes` in
-`internal/media/media.go`. If you want less prefetch, lower them; 15 seconds of
-read-ahead and a 48 MiB forward buffer are the current sweet spot.
+`internal/media/media.go`. If you want less prefetch, lower them; 30 seconds of
+read-ahead and a 96 MiB forward buffer are the current sweet spot.

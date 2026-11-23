@@ -139,7 +139,7 @@ func TestMPVArgsLocal(t *testing.T) {
 		"--sub-file=/tmp/ep.vtt",
 		"--start=12.000",
 		"--input-ipc-server=/tmp/mpv.sock",
-		"--cache-secs=30",
+		"--cache-secs=60",
 	} {
 		if !strings.Contains(args, want) {
 			t.Errorf("missing %q in %s", want, args)
