@@ -4,13 +4,13 @@ This is the only doc allowed to define what weeb-box is. Everything else links h
 
 ## What weeb-box is
 
-A **personal, local-first anime streaming client**. It searches scraped, ad-funded anime sites, resolves their HLS streams, and plays them in a proper player — with subtitles, resume, downloads, and a Netflix-grade catalog experience. It is one owner-user's tool, not a service: **there is no weeb-box server, and there never will be one.** All scraping, playback, and downloading happen on the user's own devices via plain HTTP.
+A **personal, local-first anime streaming client**. It searches scraped, ad-funded anime sites, resolves their HLS streams, and plays them in a proper player — with subtitles, resume, downloads, and a Netflix-grade catalog experience. It is a personal tool, not a service: **there is no weeb-box server, and there never will be one.** All scraping, playback, and downloading happen on the user's own devices via plain HTTP.
 
 Today weeb-box ships as a terminal app (Go, `cli/`). A native Flutter client (`app/`) is planned for phone, desktop, and Android TV.
 
 ## Who it is for
 
-One person: the owner-user. Every design decision optimizes for a single user who knows what anime is, wants to watch it without ads or a browser, and does not want an account. Secondarily, developers contributing to the repo — the docs exist so anyone (including a future agent or contributor) can build without re-deriving decisions.
+One owner and their household. The product stays personal and private, but it now carries **Netflix-style profiles** — up to five viewing slots, each with its own progress, history, search, stats, and Continue watching, including a lockable kid profile ([features.md § Profiles & account](features.md#profiles--account)). Profiles work fully signed-out; an account exists only for opt-in cross-device sync. Secondarily, developers contributing to the repo — the docs exist so anyone (including a future agent or contributor) can build without re-deriving decisions.
 
 ## Form factors
 
@@ -34,7 +34,7 @@ One person: the owner-user. Every design decision optimizes for a single user wh
 - **No public app-store presence or store-compliance work.** Scraped content fails review; this is not a business.
 - **No weeb-box-operated server of any kind** — no scraping proxy, no accounts backend. Firebase (opt-in sync only) relays the user's own rows; see [sync.md](sync.md).
 - **No torrent/P2P sources.** Legal exposure with zero upside over HLS.
-- **No social features** (watch parties, feeds, chat) and **no multi-user profiles.** The charter is single-user.
+- **No social features** (watch parties, feeds, chat). Profiles are personal viewing slots, not identities — no follows, no sharing, no feeds. (The old single-user charter was superseded by [decisions.md D-018](decisions.md#d-018--netflix-style-profiles).)
 - **No monetization surface and no telemetry.**
 - **No required account at any point.** Sign-in exists only inside opt-in sync.
 - **No encoding/subtitle toolbox.** weeb-box plays and downloads; it does not remux, transcode, or edit.

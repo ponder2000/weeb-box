@@ -73,7 +73,7 @@ Genre chip row (top AniList genres) + grid of poster cards; three season rails (
 
 **Adult gate:** when hide-adult is on and loaded metadata says Adult, the episode list is replaced by an "Adult content hidden — change in Settings" panel. Metadata-fetch failure ⇒ fail-open (list renders) — see [features.md](features.md#settings--theming).
 
-**Episode rows** (64dp): `E012` mono + title (fallback "Episode 12") + status badges — `canon` success-color / `filler` danger / `mixed` warning (list applied only under the [Max() trust rule](features.md#filler)); `✓ done` / progress % / `Started` / `↓` downloaded. Trailing play + overflow. 2dp progress bar under the row.
+**Episode rows** (64dp): `E012` mono + title (fallback "Episode 12") + status badges — `canon` success-color / `filler` danger / `mixed` warning (list applied only under the [Max() trust rule](features.md#filler)); `✓ done` / progress % / `Started` / `↓` downloaded. Tap = play; desktop rows carry a right-click context menu (download / watched / quality) — mobile rows have no trailing icons. 2dp progress bar under the row.
 
 **Filler filter:** a chip pinned above the list, `Hide filler & mixed` (CLI `f` semantics) — drives visible rows, autoplay, and Download rest ([features.md § Filler](features.md#filler)).
 
@@ -104,7 +104,18 @@ One tab, two segments.
 
 ## Settings
 
-Quality · Theme (4) · Download dir (Android/desktop; iOS shows the fixed sandbox path) · Hide adult · Autoplay · Providers sub-page (toggles, health, Diagnose) · **Sync** (off by default; sign-in lives here, never prompted) · Diagnostics (bundled libmpv version, desktop ffmpeg presence).
+Quality · Theme (4) · Download dir (Android/desktop; iOS shows the fixed sandbox path) · Hide adult · Autoplay · Providers sub-page (toggles, health, Diagnose) · **Account & sync** (sign-in lives here, never prompted) · **Profiles** (count + switch/manage shortcut) · Diagnostics (bundled libmpv version, desktop ffmpeg presence).
+
+## Profiles & account
+
+Netflix-style profiles ([features.md § Profiles & account](features.md#profiles--account)): up to five, fully usable signed-out; an account exists only for sync.
+
+- **Avatar tiles:** 96dp rounded-square (radius 20) in one of five Carbon-derived tints (`#78a9ff`, `#42be65`, `#f1c21b`, `#fa4d56`, `#bb8bff`), Plex Sans SemiBold initials, 1dp outline. A kid profile uses the same tile plus a small lock badge bottom-right, repeated in its profile-page header.
+- **"Who's watching?" switcher (route `/profiles`):** the tile grid — names under tiles, a ghost "Add profile" tile, a "Manage profiles" text button. Phone: 2 columns, full screen; desktop: 4–5 columns as a centered modal over Home. Shown at launch when more than one profile exists; reachable from Settings, the Profiles row, and an avatar chip in Home's header.
+- **Profile page (route `/profile`):** avatar + name header with a Switch profile button; the profile's own Continue-watching hero + history rows (episode rows with watched/progress states); compact per-profile settings (quality, theme, autoplay). Desktop: two-column — history left, settings right.
+- **Manage profiles:** rows with Edit (inline rename, tint picker, kid toggle, delete — delete confirms) and Add.
+- **Kid profile:** adult titles unreachable on every screen — a profile-scoped lock with no toggle, force-hiding adult above the device-local `hide_adult` ([features.md § Settings & theming](features.md#settings--theming)).
+- **Account (Settings → Account & sync):** signed-out shows "Sign in to sync across devices" with Google and Apple (iOS builds) buttons; signed-in shows the account, per-profile sync status ("last synced 2m ago"), and Sign out (reverts to local-only). Never prompted anywhere; [First-run](#first-run-experience) is unchanged.
 
 ## 10-foot TV mode (Android TV / Google TV / Fire TV)
 

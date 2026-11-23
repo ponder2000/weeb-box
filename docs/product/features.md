@@ -149,10 +149,22 @@ Stats are **deferred from app v1.0** to keep the MVP cut lean (see [decisions.md
 
 **`hide_adult` is device-local and excluded from sync** — an adult-enabled desktop must never silently unlock a phone or the TV. See [sync.md § Scope](sync.md#scope-what-syncs-what-never-does).
 
+## Profiles & account
+
+| Feature | C | A | i | D | T | Milestone | Status |
+|---|---|---|---|---|---|---|---|
+| Profiles — up to 5, signed-out/local-first; own progress, history, search, stats, settings | — (CLI = the implicit `default` profile) | ✓ | ✓ | ✓ | ✓ | M4 | planned-M4 |
+| "Who's watching" switcher + profile page + manage (rename, tint, delete) | — | ✓ | ✓ | ✓ | ✓ | M4 | planned-M4 |
+| Kid profile (adult force-hidden, no toggle) | — | ✓ | ✓ | ✓ | ✓ | M4 | planned-M4 |
+| Account sign-in (Google; Apple on iOS) for per-profile cross-device sync | planned (v1.x, REST) | ✓ | ✓ | ✓ | ✓ | M4 | planned-M4 |
+
+The CLI stays single-profile forever; when it adopts sync (v1.x) it maps to the `default` profile subtree ([sync.md § CLI ↔ app interop](sync.md#cli--app-interop)). Full UI spec: [ui-design.md § Profiles & account](ui-design.md#profiles--account).
+
 ## Feature-status change log
 
 The audit trail — a one-liner here whenever a row above flips.
 
 | Date | Change |
 |---|---|
+| 2026-11-24 | Profiles & account added to M4; recommendations moved never → deferred ([decisions.md D-018](decisions.md#d-018--netflix-style-profiles), [D-019](decisions.md#d-019--recommendations-deferred-built-on-profile-data)) |
 | 2026-11-23 | Initial inventory from the product planning rounds; CLI rows reflect shipped behavior, app rows follow the M1–M5 cut in [roadmap.md](roadmap.md) |

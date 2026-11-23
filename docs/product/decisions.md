@@ -69,3 +69,11 @@ Tours are what apps-with-servers use to justify themselves. First run is a worki
 ## D-017 — Milestone-anchored SemVer; tag releases on `main`
 
 A personal app needs no channels or codenames. `0.x` during development; `v1.0` = M3 complete; a MINOR per milestone (v1.1 sync, v1.2 TV); PATCH for provider fixes. A release is a git tag on `main` with a one-paragraph note and built artifacts attached; `dev` builds stay untagged. Consequence: changelogs read themselves ("v1.1 added sync") and rollback is a tag checkout.
+
+## D-018 — Netflix-style profiles
+
+D-008 pinned the product to one user. The owner has revised the charter: profiles are personal viewing slots inside the app — up to five, each with its own progress, history, Continue watching, search, and stats — including a lockable kid profile. They are local-first (fully usable signed-out; the D-004 sync then mirrors them per profile). Consequence: the Firestore model gains a `profiles/{pid}` segment ([sync.md § Firestore model](sync.md#firestore-model)), the app gains the Who's-watching switcher and profile page ([ui-design.md § Profiles & account](ui-design.md#profiles--account)), the CLI stays single-profile mapped to pid `default`, and the old no-profiles non-goal is superseded, not edited away.
+
+## D-019 — Recommendations deferred, built on profile data
+
+The original stance rejected a recommendations engine as overkill for one user. Profiles change the premise: per-profile watch history is exactly the signal a rec system needs. Decision: recommendations move from never to the deferred bucket with a concrete revival trigger ([roadmap.md § Deferred](roadmap.md#deferred-bucket)) — built only after profiles exist and have accrued watch data; until then AniList's own recs remain the only suggestion surface. Nothing social enters with it (no shares, no feeds — [overview.md § Non-goals](overview.md#non-goals)).

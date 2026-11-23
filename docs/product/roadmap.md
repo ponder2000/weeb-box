@@ -40,12 +40,14 @@ Slim browse (Trending + seasons + genres), first-run experience, providers scree
 - A fresh install reaches first play with zero instructions.
 - All four themes render correctly on phone + desktop; filler filter drives autoplay and Download rest.
 
-## M4 — Sync — v1.1
+## M4 — Accounts, profiles & sync — v1.1
 
-Opt-in Firebase sync ([sync.md](sync.md)) + local DB export/import as its no-cloud twin.
+Opt-in Firebase sync ([sync.md](sync.md)) + Netflix-style profiles (up to five, kid-lockable — [ui-design.md § Profiles & account](ui-design.md#profiles--account)) + local DB export/import as its no-cloud twin.
 
 **Done when:**
-- Watch on phone, open desktop: same resume point after refresh; and vice versa.
+- Profiles create/switch/delete works **fully signed-out** (local-first), and a kid profile exists with adult content unreachable from every screen.
+- After sign-in on a second device: the same profiles appear, and each profile's resume points match.
+- Watch on one device, open another: the same profile shows the same resume point after refresh; and vice versa.
 - A watched toggle propagates both directions; an un-watch (tombstone) propagates.
 - Opting out leaves all local data intact; "Delete cloud data" removes only the cloud subtree.
 - Export/import moves a full library between two devices with no account.
@@ -73,8 +75,9 @@ v1.x, no milestone until promoted. Each entry names the revival trigger.
 | RSS/simulcast calendars | Pairs with the notifications milestone |
 | New-episode notifications | Sync shipped (needs a followed-shows set) + honest OS background handling |
 | Anime list tracking (MAL/AniList, read-only first) | After sync; reuses the AniList path, no new infra |
+| Recommendations engine | Profiles shipped ([decisions.md D-018](decisions.md#d-018--netflix-style-profiles)) plus a few months of per-profile watch data — the training signal; AniList's own recs fill detail pages until then ([D-019](decisions.md#d-019--recommendations-deferred-built-on-profile-data)) |
 | Stats on app | First polish pass after v1.0 (CLI has them today) |
 
 ## Rejected
 
-Nothing lives here twice — the never-list with reasons is [overview.md § Non-goals](overview.md#non-goals), plus per-feature rows marked `rejected` in [features.md](features.md) (cast, profiles, watch parties, torrents, per-episode thumbnails, recommendations, screenshot, A-B loop, multiple download dirs, downloads on TV).
+Nothing lives here twice — the never-list with reasons is [overview.md § Non-goals](overview.md#non-goals), plus per-feature rows marked `rejected` in [features.md](features.md) (cast, watch parties, torrents, per-episode thumbnails, screenshot, A-B loop, multiple download dirs, downloads on TV). Profiles and recommendations left this list via [decisions.md D-018](decisions.md#d-018--netflix-style-profiles) and [D-019](decisions.md#d-019--recommendations-deferred-built-on-profile-data).

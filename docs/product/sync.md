@@ -6,10 +6,10 @@ The cross-device contract for weeb-box's opt-in sync, and the only spec of the F
 
 | Data | Syncs? | Rule |
 |---|---|---|
-| `watch_progress` rows | **Yes** — the core user datum (resume positions, watched marks, history) | One doc per `(provider, episode_url)` row |
+| `watch_progress` rows | **Yes** — the core user datum (resume positions, watched marks, history) | One doc per `(provider, episode_url)` row, **per profile** |
 | `provider="local"` rows | **Never** | `episode_url` is an absolute file path — meaningless elsewhere and leaks filesystem layout. Exclusion rule: `provider == "local"` (field check, not doc-ID prefix, so the rule is enforceable in security rules) |
-| `search_history` | **Yes, capped at 50** as a single doc | The cap is the bloat guard; see [§ Firestore model](#firestore-model) |
-| `settings` | **Whitelist only: `quality`, `theme`, `autoplay`** | Cross-device preferences |
+| `search_history` | **Yes, capped at 50** as a single doc | The cap is the bloat guard, per profile; see [§ Firestore model](#firestore-model) |
+| `settings` | **Whitelist only: `quality`, `theme`, `autoplay`** | Cross-device preferences, **per profile** |
 | `hide_adult` | **Never — device-local, hard rule** | An adult-enabled desktop must never silently unlock a phone or the TV; TV has no toggle at all ([features.md § TV mode](features.md#tv-mode-android-tv--google-tv--fire-tv)) |
 | `download_dir` | **Never** | A macOS path is invalid on Android; device-specific by nature |
 | `provider_state.enabled` | **Yes** (one small doc) | Which adapters the user wants is a preference |
@@ -22,18 +22,20 @@ The cross-device contract for weeb-box's opt-in sync, and the only spec of the F
 - **Local-only is the default and needs no Firebase code path at all** — sync stays completely inert until the user flips "Sync across devices" in Settings and signs in. Everything works exactly as before in SQLite.
 - **Sign-in: Google everywhere; Sign in with Apple on iOS builds** (Apple guideline 4.8 requires SIWA when Google login is offered on iOS, with equal prominence). No email/password.
 - **No anonymous auth.** Anonymous UIDs can't sign in from a second device, so they can't sync — the thing sync exists for. The local-only default already is the no-account experience.
-- **First-login merge, per row, newest `updated_at` wins:** full pull (paged 500) → one SQLite transaction applying LWW (cloud-newer ⇒ upsert local; local-newer or cloud-missing ⇒ enqueue for push; cloud tombstone newer ⇒ delete local) → `search` union capped to 50 by `last_used` → flush the push queue. `provider="local"` rows are exempt from comparison entirely.
+- **First-login merge, per row, newest `updated_at` wins:** full pull (paged 500) → one SQLite transaction applying LWW (cloud-newer ⇒ upsert local; local-newer or cloud-missing ⇒ enqueue for push; cloud tombstone newer ⇒ delete local) → `search` union capped to 50 by `last_used` → flush the push queue. The merge runs **once per profile**; the profile list itself merges by pid — cloud profiles materialize locally, local-only profiles upload on their first flush. `provider="local"` rows are exempt from comparison entirely.
 - **Sign-out** reverts the device to local-only, cloud data intact. A **"Delete cloud data"** action deletes the `users/{uid}` subtree and nothing local (the GDPR-shaped exit). Account switching re-runs the first-login merge against the new uid.
 
 ## Firestore model
 
 ```
-users/{uid}                          # shell doc {created_at} — written once, ever
-users/{uid}/progress/{docId}         # one doc per (provider, episode_url)
-users/{uid}/state/settings           # whitelisted settings + schema stamp
-users/{uid}/state/providers          # {gogoanime: true, hianime: false, ...}
-users/{uid}/state/search             # capped search history map
+users/{uid}                                  # shell doc {created_at} — written once, ever
+users/{uid}/profiles/{pid}/progress/{docId}  # one doc per (provider, episode_url) per profile
+users/{uid}/profiles/{pid}/state/settings    # whitelisted per-profile settings + schema stamp
+users/{uid}/profiles/{pid}/state/search      # capped search history map, per profile
+users/{uid}/state/providers                 # {gogoanime: true, hianime: false, ...} — account-level
 ```
+
+**Profile scoping.** `pid` is the profile's local UUID (created on-device, stable across sync), so profiles are local-first and the cloud only mirrors them. The CLI has no profiles and maps to pid `default`, keeping old rows valid. Provider toggles stay account-level; everything a profile owns lives under its `profiles/{pid}` subtree. The kid profile is a UI-level lock ([features.md § Profiles & account](features.md#profiles--account)) — its rows look identical in the cloud.
 
 No per-anime rollups, no stats docs, no device-registration docs — Home and Stats are computed by existing SQLite queries after merge. The shell doc is written once; **no `last_sync_at` heartbeat** (that would be a per-pull write tax).
 
@@ -136,7 +138,7 @@ The field whitelist is also the blob guard: an accidental cover/base64 write is 
 
 ## CLI ↔ app interop
 
-**Firestore is the only bridge between the Go CLI and the Flutter app** — no direct store import. Both compute the identical `base64url(provider + "\n" + episode_url)` doc IDs and write identical fields, so a watched episode in the TUI shows watched in the app after its next pull, and vice versa. The CLI later adopts this via a `cli/internal/sync` package speaking Firestore **REST** with a Firebase ID token (Google OAuth device-authorization flow; refresh token in the OS keychain; no Admin SDK) — the security rules see it as the same signed-in user. CLI sync status: `v1.x` ([features.md § Sync](features.md#sync)).
+**Firestore is the only bridge between the Go CLI and the Flutter app** — no direct store import. The CLI stays single-profile and reads/writes the pid `default` subtree, so its rows interoperate untouched. Both compute the identical `base64url(provider + "\n" + episode_url)` doc IDs and write identical fields, so a watched episode in the TUI shows watched in the app after its next pull, and vice versa. The CLI later adopts this via a `cli/internal/sync` package speaking Firestore **REST** with a Firebase ID token (Google OAuth device-authorization flow; refresh token in the OS keychain; no Admin SDK) — the security rules see it as the same signed-in user. CLI sync status: `v1.x` ([features.md § Sync](features.md#sync)).
 
 **One-machine coexistence:** a CLI and an app on the same device both syncing is simply two clients of one account — the same LWW rules as two devices; the shared-download-root contract is [structure.md § On-disk contracts](structure.md#on-disk-format-contracts).
 
