@@ -534,6 +534,7 @@ type Model struct {
 	fillerLoading  bool
 	fillerTitle    string
 	fillerRetry    string
+	hideFiller     bool
 	variantsByURL  map[string][]string
 	variantLoading map[string]bool
 	statsRows      []store.WatchStat
@@ -1386,20 +1387,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.status = "A download is already running"
 				return m, nil
 			}
-			if _, ok := m.main.SelectedItem().(item); !ok {
+			selected, ok := m.main.SelectedItem().(item)
+			if !ok || selected.episode.URL == "" {
 				return m, nil
 			}
-			index := m.main.Index()
-			if index < 0 || index >= len(m.episodes) {
-				return m, nil
+			if key == "d" {
+				return m.startDownload([]provider.Episode{selected.episode})
 			}
-			episodes := m.episodes[index : index+1]
-			if key == "a" {
-				episodes = m.episodes[index:]
+			// "rest of the list" follows the visible rows, so the filler
+			// filter also filters a bulk download.
+			var episodes []provider.Episode
+			for _, it := range m.main.Items()[m.main.Index():] {
+				if row, ok := it.(item); ok {
+					episodes = append(episodes, row.episode)
+				}
 			}
 			return m.startDownload(episodes)
 		case "w":
 			return m.toggleWatched()
+		case "f":
+			return m.toggleFillerFilter()
 		}
 		var cmd tea.Cmd
 		m.main, cmd = m.main.Update(msg)
@@ -2717,9 +2724,15 @@ func (p *playProgress) current() (pos, dur float64, ok bool) {
 	return p.pos, p.dur, p.ok
 }
 
+// fillerHidden reports whether the hide-filler filter skips this episode.
+func (m Model) fillerHidden(ep provider.Episode) bool {
+	return m.hideFiller && (m.fillerKinds[ep.Number] == filler.Filler || m.fillerKinds[ep.Number] == filler.Mixed)
+}
+
 // siblingEpisode returns the episode before or after info in the current list.
 // It refuses lists that belong to another anime, so a stale list from earlier
 // browsing cannot leak into playback adopted from a different entry point.
+// Episodes hidden by the filler filter are stepped over.
 func (m Model) siblingEpisode(info playbackInfo, step int) (provider.Episode, bool) {
 	if m.prov == nil || m.anime.URL != info.AnimeURL || len(m.episodes) == 0 {
 		return provider.Episode{}, false
@@ -2728,8 +2741,10 @@ func (m Model) siblingEpisode(info playbackInfo, step int) (provider.Episode, bo
 		if ep.URL != info.EpisodeURL {
 			continue
 		}
-		if next := i + step; next >= 0 && next < len(m.episodes) {
-			return m.episodes[next], true
+		for next := i + step; next >= 0 && next < len(m.episodes); next += step {
+			if !m.fillerHidden(m.episodes[next]) {
+				return m.episodes[next], true
+			}
 		}
 		return provider.Episode{}, false
 	}
@@ -3067,7 +3082,7 @@ func (m Model) footer() string {
 	case screenResults:
 		items = []string{hint("↑↓", "move"), hint("enter", "episodes"), hint("i", "cover"), hint("ctrl+b", "browse"), hint("esc", "back")}
 	case screenEpisodes:
-		items = []string{hint("enter", "play"), hint("d", "download"), hint("a", "rest"), hint("w", "watched"), hint("i", "cover"), hint("v", "queue"), hint("esc", "back")}
+		items = []string{hint("enter", "play"), hint("d", "download"), hint("a", "rest"), hint("w", "watched"), hint("f", "no filler"), hint("i", "cover"), hint("v", "queue"), hint("esc", "back")}
 	case screenPlaying:
 		items = []string{hint("[ ]", "prev / next"), hint("esc", "back")}
 	case screenDownloads:
@@ -3375,29 +3390,35 @@ func (m Model) coverView() string {
 
 // episodeItems builds catalog items; the first token is the status column.
 func (m Model) episodeItems() []list.Item {
-	items := make([]list.Item, len(m.episodes))
-	for i, ep := range m.episodes {
+	items := make([]list.Item, 0, len(m.episodes))
+	for _, ep := range m.episodes {
+		kind := m.fillerKinds[ep.Number]
+		if m.fillerHidden(ep) {
+			continue
+		}
 		tokens := []token{episodeState(m.progressByURL[ep.URL])}
 		if _, ok := m.downloadsByNum[ep.Number]; ok {
 			tokens = append(tokens, token{text: "downloaded", kind: tokOK})
 		}
-		switch m.fillerKinds[ep.Number] {
+		switch kind {
 		case filler.Filler:
 			tokens = append(tokens, token{text: "filler", kind: tokWarn})
 		case filler.Mixed:
 			tokens = append(tokens, token{text: "mixed", kind: tokMuted})
+		case filler.Canon:
+			tokens = append(tokens, token{text: "canon", kind: tokMuted})
 		}
 		parts := make([]string, len(tokens))
 		for j, t := range tokens {
 			parts[j] = t.text
 		}
-		items[i] = item{
+		items = append(items, item{
 			title:     fmt.Sprintf("E%03d", ep.Number),
 			titleKind: tokAccent,
 			desc:      strings.Join(parts, " · "),
 			tokens:    tokens,
 			episode:   ep,
-		}
+		})
 	}
 	return items
 }
@@ -3441,6 +3462,34 @@ func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
 	}
 	m.main.SetItems(m.episodeItems())
 	m.main.Select(index)
+	return m, nil
+}
+
+// toggleFillerFilter hides or shows filler/mixed rows; autoplay, next/prev and
+// bulk download follow the visible list.
+// shortcut: the choice is per-session, not persisted across runs.
+func (m Model) toggleFillerFilter() (tea.Model, tea.Cmd) {
+	if len(m.fillerKinds) == 0 {
+		m.status = "No filler list for this show"
+		return m, nil
+	}
+	var keep string
+	if selected, ok := m.main.SelectedItem().(item); ok {
+		keep = selected.episode.URL
+	}
+	m.hideFiller = !m.hideFiller
+	m.main.SetItems(m.episodeItems())
+	for i, it := range m.main.Items() {
+		if row, ok := it.(item); ok && row.episode.URL == keep {
+			m.main.Select(i)
+			break
+		}
+	}
+	if m.hideFiller {
+		m.status = "Filler hidden · f shows it again"
+	} else {
+		m.status = "Filler shown"
+	}
 	return m, nil
 }
 
@@ -3781,6 +3830,7 @@ func (m Model) helpView() string {
 		keyline("d", "download episode"),
 		keyline("a", "download from here"),
 		keyline("w", "mark watched / unwatched"),
+		keyline("f", "hide filler episodes"),
 		keyline("x", "cancel download"),
 		keyline("r", "retry failed / cancelled"),
 		keyline("t", "test all providers"),

@@ -20,6 +20,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/ponder2000/weeb-box/internal/cover"
 	"github.com/ponder2000/weeb-box/internal/deps"
+	"github.com/ponder2000/weeb-box/internal/filler"
 	lib "github.com/ponder2000/weeb-box/internal/library"
 	"github.com/ponder2000/weeb-box/internal/media"
 	"github.com/ponder2000/weeb-box/internal/metadata"
@@ -1492,6 +1493,54 @@ func TestSiblingEpisode(t *testing.T) {
 	m.prov = nil
 	if _, ok := m.siblingEpisode(playbackInfo{AnimeURL: "a", EpisodeURL: "e1"}, 1); ok {
 		t.Error("matched without a provider")
+	}
+}
+
+func TestFillerFilter(t *testing.T) {
+	m := episodeFlowModel(t, nil)
+	m.fillerKinds = map[int]filler.Kind{1: filler.Canon, 2: filler.Filler, 3: filler.Mixed}
+	m.main.SetItems(m.episodeItems())
+
+	// Rows carry their category; nothing is hidden yet.
+	if items := m.episodeItems(); len(items) != 3 {
+		t.Fatalf("unfiltered rows = %d, want 3", len(items))
+	}
+	view := m.episodesView()
+	for _, want := range []string{"canon", "filler", "mixed"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("episode view missing %q category", want)
+		}
+	}
+
+	// The f toggle needs a list, then hides filler and mixed rows.
+	updated, _ := m.handleKey(runeKey('f'))
+	m = updated.(Model)
+	if !m.hideFiller || len(m.main.Items()) != 1 {
+		t.Fatalf("filter on: hideFiller=%v rows=%d", m.hideFiller, len(m.main.Items()))
+	}
+	if row, ok := m.main.Items()[0].(item); !ok || row.episode.URL != "e1" {
+		t.Fatalf("visible row = %+v", m.main.Items()[0])
+	}
+
+	// Next/prev steps over hidden rows in both directions.
+	if _, ok := m.siblingEpisode(playbackInfo{AnimeURL: "a", EpisodeURL: "e1"}, 1); ok {
+		t.Error("next crossed a hidden filler")
+	}
+	if ep, ok := m.siblingEpisode(playbackInfo{AnimeURL: "a", EpisodeURL: "e3"}, -1); !ok || ep.URL != "e1" {
+		t.Fatalf("prev = %+v ok=%v", ep, ok)
+	}
+
+	// A second toggle restores the full list.
+	updated, _ = m.handleKey(runeKey('f'))
+	if m = updated.(Model); m.hideFiller || len(m.main.Items()) != 3 {
+		t.Fatalf("filter off: hideFiller=%v rows=%d", m.hideFiller, len(m.main.Items()))
+	}
+
+	// Without filler data the toggle refuses instead of hiding everything.
+	bare := episodeFlowModel(t, nil)
+	updated, _ = bare.handleKey(runeKey('f'))
+	if got := updated.(Model); got.hideFiller || got.status != "No filler list for this show" {
+		t.Fatalf("no data: hideFiller=%v status=%q", got.hideFiller, got.status)
 	}
 }
 
