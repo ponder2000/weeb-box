@@ -1,5 +1,7 @@
 # Repository guidance
 
+Product planning and design truth lives in [`docs/product/`](docs/product/README.md) — overview, features, structure, UI design, sync, decisions, roadmap, operations. This file stays the code and contributor guide.
+
 ## Branches
 
 - Use `dev` as the primary branch for day-to-day development. Start new work there and push development commits to `origin/dev`.
