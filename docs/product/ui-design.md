@@ -50,7 +50,7 @@ Downloads+Library merge into one tab with two segments; the CLI's Setup screen i
 
 Vertical order (16dp screen padding, 24dp between sections):
 
-1. **Hero — Continue watching.** Full-bleed 16:9 backdrop (240dp phone / 360dp tablet) with bottom scrim; eyebrow `CONTINUE WATCHING`; title 28sp; meta line `E012 · 45% watched · gogoanime` (mono); 4dp progress bar with `10:48 / 24:00`; **Resume** (filled) + **Episodes** (outlined) buttons.
+1. **Hero — Continue watching.** Full-bleed 16:9 backdrop (240dp phone / 360dp tablet; AniList banner, **center-cropped — never stretched**) with bottom scrim; eyebrow `CONTINUE WATCHING`; title 28sp; meta line `E012 · 45% watched · gogoanime` (mono); 4dp progress bar with `10:48 / 24:00`; **Resume** (filled) + **Episodes** (outlined) buttons.
 2. **Continue-watching rail.** 16:9 landscape cards 280×158dp, 12dp gap, progress bar on the card, one card per anime (same grouping rule as the CLI's `RecentProgress`).
 3. **Trending rail** (AniList, no scraping — guarantees first-run content). Poster cards 124×186dp, score badge, 10–12 per rail.
 4. **Season rails** (This / Next / Previous season). Same card size.
@@ -69,13 +69,13 @@ Genre chip row (top AniList genres) + grid of poster cards; three season rails (
 
 ## Title detail & episodes
 
-**Header** (scrolls away): 2:3 poster 140×210dp; title 24sp; badges — score (mono, `/100`), age rating, duration, provider chip; genre chips; 3-line synopsis with expand. Actions: **Play next unwatched**, **Download rest** (queues all remaining *visible* rows — the filler filter applies), cover viewer, share.
+**Header** (scrolls away): full-bleed 16:9 backdrop (AniList banner, **center-cropped — banners are ~4.75:1, never stretched**) with a bottom scrim; title 24sp on the art; badges under it — score (mono, `/100`), age rating, duration, provider chip; a small 2:3 poster (96×144 phone, 140×210 tablet portrait) overlaps the backdrop's bottom-left edge; 2-line synopsis + More. Actions: **Play next unwatched**, **Download rest** (queues all remaining *visible* rows — the filler filter applies), cover viewer.
 
 **Adult gate:** when hide-adult is on and loaded metadata says Adult, the episode list is replaced by an "Adult content hidden — change in Settings" panel. Metadata-fetch failure ⇒ fail-open (list renders) — see [features.md](features.md#settings--theming).
 
 **Episode rows** (64dp): `E012` mono + title (fallback "Episode 12") + status badges — `canon` success-color / `filler` danger / `mixed` warning (list applied only under the [Max() trust rule](features.md#filler)); `✓ done` / progress % / `Started` / `↓` downloaded. Tap = play; desktop rows carry a right-click context menu (download / watched / quality) — mobile rows have no trailing icons. 2dp progress bar under the row.
 
-**Filler filter:** a chip pinned above the list, `Hide filler & mixed` (CLI `f` semantics) — drives visible rows, autoplay, and Download rest ([features.md § Filler](features.md#filler)).
+**Filler filter:** a chip pinned above the list, `Hide filler & mixed · N hidden` (CLI `f` semantics) — drives visible rows, autoplay, and Download rest ([features.md § Filler](features.md#filler)).
 
 **Dub/sub rows are not merged** in detail lists: each provider's episodes are one list (the merged row pinned the provider), and cross-provider duplicates simply don't appear — resume is per provider row by design.
 
@@ -116,6 +116,8 @@ Netflix-style profiles ([features.md § Profiles & account](features.md#profiles
 - **Manage profiles:** rows with Edit (inline rename, tint picker, kid toggle, delete — delete confirms) and Add.
 - **Kid profile:** adult titles unreachable on every screen — a profile-scoped lock with no toggle, force-hiding adult above the device-local `hide_adult` ([features.md § Settings & theming](features.md#settings--theming)).
 - **Account (Settings → Account & sync):** signed-out shows "Sign in to sync across devices" with Google and Apple (iOS builds) buttons; signed-in shows the account, per-profile sync status ("last synced 2m ago"), and Sign out (reverts to local-only). Never prompted anywhere; [First-run](#first-run-experience) is unchanged.
+- **Switching profiles mid-playback** stops the player gracefully — the position saves to the profile that was active, like any exit; progress is never silently reattributed across profiles.
+- **A kid profile's Settings shows no hide-adult row** — the lock is a property of the profile, not a setting; the device-local `hide_adult` remains under the owner's profiles only.
 
 ## 10-foot TV mode (Android TV / Google TV / Fire TV)
 
@@ -159,6 +161,7 @@ The one product rule ([decisions.md D-015](decisions.md#d-015--the-one-state-rul
 | Library · Files | Scan indicator | "Downloads land here" (root missing = same) | n/a (filesystem) | Fully usable |
 | Providers | Health load | n/a (5 rows always) | Diagnose reports per-provider error text | "You're offline — statuses may be stale" |
 | Settings | n/a | n/a | Sync failures surface as "Sync paused — sign in again" only inside the Sync row ([sync.md § Failure modes](sync.md#failure-modes)) | Sync silently deferred |
+| Profiles & account | n/a (local) | At 5/5 profiles the Add ghost disappears and the caption reads "5 of 5 used" | Sign-in/token failure never interrupts anything: the Account block shows "Sync paused — sign in again" and nothing else changes | Sign-in defers silently; switching and managing profiles work offline |
 
 **Ambient detection:** any adapter `last_error` lights the Home "Providers need attention" chip — MegaPlay rot announces itself instead of waiting for a failed search ([features.md § Providers](features.md#providers)); detection tooling is [operations.md](operations.md#detection-how-breakage-is-noticed).
 
