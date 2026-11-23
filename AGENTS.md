@@ -1,5 +1,11 @@
 # Repository guidance
 
+## Branches
+
+- Use `dev` as the primary branch for day-to-day development. Start new work there and push development commits to `origin/dev`.
+- `main` is the release and workflow branch. Promote `dev` to `main` manually when ready: open a pull request with base `main` and compare `dev`, or, if branch protection permits, run `git switch main`, `git pull --ff-only origin main`, `git merge dev`, and `git push origin main`.
+- GitHub Actions can advance `main` with provider-status commits. Fetch before a local merge, keep those commits, and do not force-push `main`. Do not merge development changes into `main` without an explicit request.
+
 - `cli/` contains the Go module, terminal app, assets, scripts, and themes. Run Go commands from `cli/`; CLI paths below are relative to that directory unless they start with `.github/`.
 - `app/` is reserved for a future standalone Flutter client for Android, iOS, macOS, Linux, and Windows. Do not scaffold or implement it until requested.
 

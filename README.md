@@ -9,6 +9,8 @@ A Go TUI for watching and downloading anime from multiple sources. Watch Desk pu
 
 For the before/after design study, open [`cli/assets/tui-before-after.html`](cli/assets/tui-before-after.html) in a browser. Run all Go commands on this page from `cli/`.
 
+Develop on `dev`. When changes are ready, promote them to `main` with a pull request or a local merge if branch protection allows it. Scheduled provider checks run on `main`; CI also checks pull requests.
+
 ## Prerequisites
 
 - Go 1.27.3 or newer to build (see [`cli/go.mod`](cli/go.mod))
