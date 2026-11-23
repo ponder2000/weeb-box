@@ -50,7 +50,7 @@ Downloads+Library merge into one tab with two segments; the CLI's Setup screen i
 
 Vertical order (16dp screen padding, 24dp between sections):
 
-1. **Hero — Continue watching.** Full-bleed 16:9 backdrop (240dp phone / 360dp tablet) with bottom scrim; eyebrow `CONTINUE WATCHING`; title 28sp; meta line `E012 · 45% watched · gogoanime` (mono); 4dp progress bar with `12:04 / 24:00`; **Resume** (filled) + **Episodes** (outlined) buttons.
+1. **Hero — Continue watching.** Full-bleed 16:9 backdrop (240dp phone / 360dp tablet) with bottom scrim; eyebrow `CONTINUE WATCHING`; title 28sp; meta line `E012 · 45% watched · gogoanime` (mono); 4dp progress bar with `10:48 / 24:00`; **Resume** (filled) + **Episodes** (outlined) buttons.
 2. **Continue-watching rail.** 16:9 landscape cards 280×158dp, 12dp gap, progress bar on the card, one card per anime (same grouping rule as the CLI's `RecentProgress`).
 3. **Trending rail** (AniList, no scraping — guarantees first-run content). Poster cards 124×186dp, score badge, 10–12 per rail.
 4. **Season rails** (This / Next / Previous season). Same card size.
