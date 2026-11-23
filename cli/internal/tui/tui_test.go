@@ -1615,6 +1615,42 @@ func TestPlaybackLocalNeverAutoplays(t *testing.T) {
 	}
 }
 
+// listProvider streams and lists episodes so a Home resume can adopt both.
+type listProvider struct {
+	stubProvider
+	episodes []provider.Episode
+	err      error
+}
+
+func (listProvider) Name() string { return "animekai" }
+
+func (p listProvider) Episodes(context.Context, provider.Anime) ([]provider.Episode, error) {
+	return p.episodes, p.err
+}
+
+func (listProvider) Stream(context.Context, provider.Episode) (provider.Stream, error) {
+	return provider.Stream{URL: "https://cdn.example/master.m3u8"}, nil
+}
+
+func TestResumeCmdCarriesEpisodes(t *testing.T) {
+	anime := provider.Anime{Title: "A", URL: "a"}
+	ep := provider.Episode{Number: 1, URL: "e1"}
+
+	msg, ok := resumeCmd(nil, listProvider{episodes: []provider.Episode{ep, {Number: 2, URL: "e2"}}}, anime, ep)().(streamMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("msg=%T err=%v", msg, msg.err)
+	}
+	if msg.provider == nil || len(msg.episodes) != 2 {
+		t.Fatalf("resume msg lacks the episode list: provider=%v episodes=%d", msg.provider != nil, len(msg.episodes))
+	}
+
+	// A failed episode list must still play, without adopting a stale list.
+	msg, ok = resumeCmd(nil, listProvider{err: errors.New("list gone")}, anime, ep)().(streamMsg)
+	if !ok || msg.err != nil || msg.provider != nil || msg.episodes != nil {
+		t.Fatalf("list failure should only drop next/prev: ok=%v err=%v episodes=%v", ok, msg.err, msg.episodes)
+	}
+}
+
 func TestAutoplaySetting(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "autoplay-setting.db"))
 	if err != nil {

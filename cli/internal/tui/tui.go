@@ -1826,7 +1826,7 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Resuming %s E%03d…", p.AnimeTitle, p.EpisodeNumber)
 			anime := provider.Anime{Title: p.AnimeTitle, URL: p.AnimeURL}
 			episode := provider.Episode{Number: p.EpisodeNumber, URL: p.EpisodeURL}
-			return m, tea.Batch(m.spinner.Tick, streamCmd(m.st, m.prov, anime, episode))
+			return m, tea.Batch(m.spinner.Tick, resumeCmd(m.st, m.prov, anime, episode))
 		}
 		var cmd tea.Cmd
 		m.resume, cmd = m.resume.Update(msg)
@@ -2718,8 +2718,8 @@ func (p *playProgress) current() (pos, dur float64, ok bool) {
 }
 
 // siblingEpisode returns the episode before or after info in the current list.
-// It refuses lists that belong to another anime, so next/prev does nothing when
-// playback was resumed from Home.
+// It refuses lists that belong to another anime, so a stale list from earlier
+// browsing cannot leak into playback adopted from a different entry point.
 func (m Model) siblingEpisode(info playbackInfo, step int) (provider.Episode, bool) {
 	if m.prov == nil || m.anime.URL != info.AnimeURL || len(m.episodes) == 0 {
 		return provider.Episode{}, false
@@ -4408,6 +4408,34 @@ func streamCmd(st *store.Store, p provider.Provider, anime provider.Anime, episo
 			start:    saved.Position,
 			duration: saved.Duration,
 		}
+	}
+}
+
+// resumeCmd backs a Home resume: the stream and the episode list load
+// concurrently, and the list rides along on the streamMsg so adoptProvider
+// pins it — otherwise autoplay and next/prev die with the resumed episode.
+// shortcut: an episode-list failure plays on without next/prev.
+func resumeCmd(st *store.Store, p provider.Provider, anime provider.Anime, episode provider.Episode) tea.Cmd {
+	return func() tea.Msg {
+		var (
+			wg         sync.WaitGroup
+			episodes   []provider.Episode
+			episodeErr error
+		)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			episodes, episodeErr = p.Episodes(ctx, anime)
+		}()
+		msg, _ := streamCmd(st, p, anime, episode)().(streamMsg)
+		wg.Wait()
+		if msg.err != nil || episodeErr != nil || len(episodes) == 0 {
+			return msg
+		}
+		msg.provider, msg.episodes = p, episodes
+		return msg
 	}
 }
 
