@@ -2577,7 +2577,9 @@ func (m Model) clickHome(bx, by int) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) clickList(target *list.Model, by, listStart int, on screen) tea.Cmd {
-	return m.clickListRows(target, by, listStart, on, 2)
+	// Two-line rows paint title + desc + the delegate's blank Spacing line, so
+	// the on-screen stride is Height()+Spacing() = 3, not Height().
+	return m.clickListRows(target, by, listStart, on, 3)
 }
 
 // clickListRows also supports the one-line recent searches list. target
@@ -2600,9 +2602,9 @@ func (m *Model) clickListRows(target *list.Model, by, listStart int, on screen, 
 }
 
 // listIndex maps a terminal row inside a list to an absolute item index. The
-// default list delegate renders each item on two lines.
+// default list delegate renders each item on two lines plus one spacing line.
 func listIndex(l list.Model, row int) int {
-	return listIndexRows(l, row, 2)
+	return listIndexRows(l, row, 3)
 }
 
 // listIndexRows maps a row using the delegate's line count per item.

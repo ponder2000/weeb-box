@@ -456,11 +456,52 @@ func TestListIndexMapsRows(t *testing.T) {
 	if got := listIndex(l, 1); got != 0 {
 		t.Errorf("description row = %d", got)
 	}
-	if got := listIndex(l, 2); got != 1 {
-		t.Errorf("row 2 = %d", got)
+	if got := listIndex(l, 2); got != 0 {
+		t.Errorf("spacing row = %d", got)
+	}
+	if got := listIndex(l, 3); got != 1 {
+		t.Errorf("row 3 = %d", got)
 	}
 	if got := listIndex(l, 999); got != -1 {
 		t.Errorf("out of range = %d", got)
+	}
+}
+
+func TestMouseClickSelectsPaintedListRow(t *testing.T) {
+	m := New(nil, t.TempDir(), nil)
+	m.width, m.height = 80, 44
+	m.screen = screenResults
+	items := make([]list.Item, 8)
+	for i := range items {
+		items[i] = item{title: "Item " + strconv.Itoa(i+1), desc: "row " + strconv.Itoa(i+1)}
+	}
+	m.main.SetItems(items)
+	m.layout()
+
+	// Check the painted position, not the hit-test's own coordinates: rows are
+	// three lines tall (title + description + delegate spacing).
+	view := strings.Split(m.View(), "\n")
+	titleRow, descRow := -1, -1
+	for y, line := range view {
+		if strings.Contains(line, "Item 6") {
+			titleRow = y
+		}
+		if strings.Contains(line, "row 6") {
+			descRow = y
+		}
+	}
+	if titleRow < 0 || descRow != titleRow+1 {
+		t.Fatalf("painted rows: title=%d desc=%d", titleRow, descRow)
+	}
+	for _, row := range []int{titleRow, descRow} {
+		m.lastClickKey = "" // exercise selection, not the double-click activate
+		updated, _ := m.handleMouse(tea.MouseMsg{
+			X: m.leftMargin() + 2, Y: row,
+			Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+		})
+		if got := updated.(Model).main.Index(); got != 5 {
+			t.Fatalf("click on painted row %d selected index %d, want 5", row, got)
+		}
 	}
 }
 
