@@ -104,7 +104,16 @@ One tab, two segments.
 
 ## Settings
 
-Quality · Theme (4) · Download dir (Android/desktop; iOS shows the fixed sandbox path) · Hide adult · Autoplay · Providers sub-page (toggles, health, Diagnose) · **Account & sync** (sign-in lives here, never prompted) · **Profiles** (count + switch/manage shortcut) · Diagnostics (bundled libmpv version, desktop ffmpeg presence).
+Grouped cards, one section per card, in order:
+
+1. **Account & sync** — signed-out: "Sign in to sync across devices" + Google and Apple buttons (Apple on iOS builds); signed-in: account row, per-profile sync status ("last synced 2m ago"), **Sign out** styled as a danger row. Never prompted elsewhere.
+2. **Playback** — Quality as a segmented control (Auto / 1080p / 720p / 480p) · Autoplay next toggle.
+3. **Appearance** — the theme as a **2×2 preview grid** (a mini Home card per theme — Carbon Dark, Carbon Light, Tokyo Night, Mono), selected marked by a primary outline; not color dots.
+4. **Content** — Hide adult toggle (absent on kid profiles, [§ Profiles & account](#profiles--account); TV has none at all).
+5. **Downloads** — download dir as a breadcrumb + Change (Android/desktop; iOS shows the fixed sandbox path) · **Rebuild library index** action (runs the [scanning progress](#startup-indexing--artwork)) · **Refresh artwork cache** action (linear progress) · storage-used line.
+6. **Profiles** — count + switch/manage shortcut ([§ Profiles & account](#profiles--account)).
+7. **Providers** — link row with the enabled count and health dots.
+8. **About & diagnostics** — app/libmpv versions (ffmpeg presence desktop-only) · Export data / Import data (M4) · licenses.
 
 ## Profiles & account
 
@@ -145,6 +154,17 @@ Window: default 1280×800, min 540×720, last size/position remembered; native c
 
 No onboarding tour. **First run is a working Home:** Trending rail (AniList, no scraping, never blank) + an empty Continue-watching row with one honest line — "Nothing yet — search a series to start." All five providers default ON. Adult hidden by default. First search → play has zero dialogs: type → merged results → episodes → tap → auto quality → playing, with automatic fallback and a toast if a source dies. Sync is never prompted, never timed to N sessions — it waits in Settings ([decisions.md D-016](decisions.md#d-016--no-onboarding-tour-working-home-instead)). Desktop/TV first-run differs only in layout, not in content or steps.
 
+## Startup, indexing & artwork
+
+The app is client-only — launch does real on-device work, and the design shows it honestly without ever blocking:
+
+- **Splash:** the app tile on the background for the ~1s SQLite open; no spinner theater.
+- **First-run index:** the download root scans (filesystem is truth) behind a dismissible progress card on Home — "Setting up · indexing library · 342 files" — while rails render as skeletons. **Nothing gates on completion.**
+- **Artwork warm-up:** covers for history/rails fetch in parallel and stream in (250 MB disk cache); a missing cover is its placeholder tile, never a spinner.
+- **Reindexing:** Library → Files shows a scanning line ("Scanning… 1,204 files · 8 new") during a manual rescan or a dir change; rows stay interactive.
+- **Refresh artwork** (Settings → Downloads) re-fetches the cover cache behind a linear progress row.
+- **The rule: local work shows progress, network work shows skeletons, nothing blocks launch.**
+
 ## Error, empty, loading & offline states
 
 The one product rule ([decisions.md D-015](decisions.md#d-015--the-one-state-rule)): **every screen renders its local truth first (SQLite: progress, history, library, toggles) and treats network data as optional enrichment — a failure may cost a badge or a cover, never the screen. The UI names the culprit and offers exactly one retry.** "Something went wrong" is banned. Loading = skeletons that telegraph structure. Empty = one honest sentence + one next action. Offline = a global banner, screens stay usable from local truth, network actions show "You're offline — retry."
@@ -162,6 +182,7 @@ The one product rule ([decisions.md D-015](decisions.md#d-015--the-one-state-rul
 | Providers | Health load | n/a (5 rows always) | Diagnose reports per-provider error text | "You're offline — statuses may be stale" |
 | Settings | n/a | n/a | Sync failures surface as "Sync paused — sign in again" only inside the Sync row ([sync.md § Failure modes](sync.md#failure-modes)) | Sync silently deferred |
 | Profiles & account | n/a (local) | At 5/5 profiles the Add ghost disappears and the caption reads "5 of 5 used" | Sign-in/token failure never interrupts anything: the Account block shows "Sync paused — sign in again" and nothing else changes | Sign-in defers silently; switching and managing profiles work offline |
+| Startup & indexing | Splash tile ~1s (SQLite open) | First run with no library: straight to the empty Home | Indexing never fails a screen — the progress card reports and dismisses; artwork failures leave placeholder tiles | Indexing works offline; artwork defers to skeletons ([§ Startup](#startup-indexing--artwork)) |
 
 **Ambient detection:** any adapter `last_error` lights the Home "Providers need attention" chip — MegaPlay rot announces itself instead of waiting for a failed search ([features.md § Providers](features.md#providers)); detection tooling is [operations.md](operations.md#detection-how-breakage-is-noticed).
 

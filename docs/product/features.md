@@ -100,6 +100,7 @@ Platform columns: **C**LI · **A**ndroid · **i**OS · **D**esktop · **T**V. `�
 | Filesystem scan (`mp4/mkv/webm/avi/mov/m4v/ts`, skips `.part`) | ✓ | ✓ | ✓ | ✓ | — | M2 | shipped-CLI |
 | Local resume (`provider="local"`, keyed by absolute path — never synced) | ✓ | ✓ | ✓ | ✓ | — | M2 | shipped-CLI |
 | Rescan (never deletes DB rows) | ✓ | ✓ | ✓ | ✓ | — | M2 | shipped-CLI |
+| First-run indexing + artwork warm-up (non-blocking: progress card on Home, skeleton rails, covers stream in) | — | ✓ | ✓ | ✓ | — | M2 | planned-M2 |
 | Delete a file from the library (DB row may go stale — accepted) | — | ✓ | ✓ | ✓ | — | M2 | planned-M2 |
 
 **Cross-client contract.** If the CLI and app share one download root, both scanners parse the same filename schema (see [structure.md § On-disk contracts](structure.md#on-disk-format-contracts)); each client re-indexes what it finds. The downloads DB table is a hint, never truth.
@@ -166,5 +167,6 @@ The audit trail — a one-liner here whenever a row above flips.
 
 | Date | Change |
 |---|---|
+| 2026-11-24 | Startup/indexing/artwork surfaces spec'd (client-only launch honesty — [ui-design.md § Startup](ui-design.md#startup-indexing--artwork)); Settings redesigned into 8 grouped cards |
 | 2026-11-24 | Profiles & account added to M4; recommendations moved never → deferred ([decisions.md D-018](decisions.md#d-018--netflix-style-profiles), [D-019](decisions.md#d-019--recommendations-deferred-built-on-profile-data)) |
 | 2026-11-23 | Initial inventory from the product planning rounds; CLI rows reflect shipped behavior, app rows follow the M1–M5 cut in [roadmap.md](roadmap.md) |
