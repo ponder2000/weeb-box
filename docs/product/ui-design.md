@@ -192,6 +192,8 @@ Text scaling honors OS settings (layouts must survive 150%); contrast meets the 
 
 ## Mock handoff
 
-The Brilliant `weeb-box` project contains the Carbon Dark phone, desktop, tablet, and state boards. The Android TV board adds six 1920×1080 frames: Home (Resume focus), Title (episode focus and active filler filter), Search (voice and keyboard), Player (transport focus and autoplay card), Settings (quality focus), and Browse (poster focus and its title below the rail). `Exports/weeb-box-tv.png` has the TV board; the two `weeb-box-settings-*.png` exports show all eight cards below the fold.
+Open [`docs/design/weeb-box/`](../design/weeb-box/) as a local project in Brilliant and edit [`main.bl`](../design/weeb-box/main.bl) there. Git tracks the editable canvas, its styles, and the artwork it references. The artwork is third-party mock content, not covered by the repository's code license. Generate PNGs locally when needed; `Exports/` and Brilliant's local caches are not tracked.
+
+The canvas contains the Carbon Dark phone, desktop, tablet, and state boards. The Android TV board has six 1920×1080 frames: Home (Resume focus), Title (episode focus and active filler filter), Search (voice and keyboard), Player (transport focus and autoplay card), Settings (quality focus), and Browse (poster focus and its title below the rail). For a full Settings export, select the inner content frame to include all eight cards below the fold.
 
 These are static references. Verify scroll and focus traversal, back behavior, screen-reader labels, contrast over real artwork, focus after dialogs close, and 150% text on the running app. Before shipping restricted profiles or TV, reconcile the promise to hide adult titles with the ordinary profile's fail-open behavior on unknown metadata ([Adult gate](#title-detail--episodes)); static mocks cannot establish that the restriction works.
