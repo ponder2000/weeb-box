@@ -75,7 +75,7 @@ Genre chip row (top AniList genres) + grid of poster cards; three season rails (
 
 **Episode rows** (64dp): `E012` mono + title (fallback "Episode 12") + status badges — `canon` success-color / `filler` danger / `mixed` warning (list applied only under the [Max() trust rule](features.md#filler)); `✓ done` / progress % / `Started` / `↓` downloaded. Tap = play; desktop rows carry a right-click context menu (download / watched / quality) — mobile rows have no trailing icons. 2dp progress bar under the row.
 
-**Filler filter:** a chip pinned above the list, `Hide filler & mixed · N hidden` (CLI `f` semantics) — drives visible rows, autoplay, and Download rest ([features.md § Filler](features.md#filler)).
+**Filler filter:** a chip pinned above the list, `Hide filler & mixed` when off; when on, show the selected state and append `· N hidden`. It drives visible rows, autoplay, and Download rest ([features.md § Filler](features.md#filler)).
 
 **Dub/sub rows are not merged** in detail lists: each provider's episodes are one list (the merged row pinned the provider), and cross-provider duplicates simply don't appear — resume is per provider row by design.
 
@@ -134,7 +134,7 @@ Netflix-style profiles ([features.md § Profiles & account](features.md#profiles
 
 **10-foot rules:** 5% overscan-safe margins; type scale ~1.75× phone (body 24sp, headers 28sp, hero 44sp); poster cards 200×300dp, **8 per rail max**; every selectable has a 3dp primary focus ring + ~4% scale-up; the focused card's title/meta render in a label row beneath the rail (Android TV requires visible focused text); no hover, no swipe — every action has a D-pad path.
 
-**Traversal.** Home: hero is first focus; up from any rail reaches the top tab row (Home · Browse · Search · Library · Settings); left/right within a rail; up/down between rails; Back pops a level, Back on Home root exits. Detail: header static, episode list is up/down rows, center = play, long-press center = action sheet (a D-pad list). Settings: single column, center activates, left/right changes values, focused text announces state ("Hide adult: On" — on TV it is always On and unchangeable). Sheets become centered D-pad lists focused on the current selection.
+**Traversal.** Home: hero is first focus; up from any rail reaches the top tab row (Home · Browse · Search · Library · Settings); left/right within a rail; up/down between rails; Back pops a level, Back on Home root exits. Detail: header static, episode list is up/down rows, center = play, long-press center = action sheet (a D-pad list). Settings: single column, center activates, left/right changes values, focused controls announce their state (e.g. "Playback quality: Auto"). The adult restriction is explanatory text, not a focusable toggle. Sheets become centered D-pad lists focused on the current selection.
 
 **Remote key map:** center = play/pause · `MEDIA_PLAY/PAUSE` = same · `MEDIA_FAST_FORWARD/REWIND` = ±10s · `CHANNEL_UP/DOWN` = next/prev episode · Back = exit with resume saved.
 
@@ -189,3 +189,9 @@ The one product rule ([decisions.md D-015](decisions.md#d-015--the-one-state-rul
 ## Accessibility
 
 Text scaling honors OS settings (layouts must survive 150%); contrast meets the Carbon palette's built-in ratios; focus rings are 3dp and always visible (TV requirement doubles as keyboard-navigation aid); all state is conveyed by text/glyph, never color alone (Mono theme is the proof).
+
+## Mock handoff
+
+The Brilliant `weeb-box` project contains the Carbon Dark phone, desktop, tablet, and state boards. The Android TV board adds six 1920×1080 frames: Home (Resume focus), Title (episode focus and active filler filter), Search (voice and keyboard), Player (transport focus and autoplay card), Settings (quality focus), and Browse (poster focus and its title below the rail). `Exports/weeb-box-tv.png` has the TV board; the two `weeb-box-settings-*.png` exports show all eight cards below the fold.
+
+These are static references. Verify scroll and focus traversal, back behavior, screen-reader labels, contrast over real artwork, focus after dialogs close, and 150% text on the running app. Before shipping restricted profiles or TV, reconcile the promise to hide adult titles with the ordinary profile's fail-open behavior on unknown metadata ([Adult gate](#title-detail--episodes)); static mocks cannot establish that the restriction works.
