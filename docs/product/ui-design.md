@@ -108,9 +108,9 @@ Grouped cards, one section per card, in order:
 
 1. **Account & sync** — signed-out: "Sign in to sync across devices" + Google and Apple buttons (Apple on iOS builds); signed-in: account row, per-profile sync status ("last synced 2m ago"), **Sign out** styled as a danger row. Never prompted elsewhere.
 2. **Playback** — Quality as a segmented control (Auto / 1080p / 720p / 480p) · Autoplay next toggle.
-3. **Appearance** — the theme as a **2×2 preview grid** (a mini Home card per theme — Carbon Dark, Carbon Light, Tokyo Night, Mono), selected marked by a primary outline; not color dots.
+3. **Appearance** — the theme as a **2×2 preview grid**: one mini Home card per theme (160×96 phone / 200×120 desktop, radius 4, 2dp outline — a mini hero strip on the theme's surface carrying a small Resume chip in the theme's primary, three mini poster tiles, two outline chip bars, theme name under the card). The **selection ring and label use the app's `#78a9ff`**, not the previewed theme's, so selection reads consistently on Carbon Dark. Not color dots.
 4. **Content** — Hide adult toggle (absent on kid profiles, [§ Profiles & account](#profiles--account); TV has none at all).
-5. **Downloads** — download dir as a breadcrumb + Change (Android/desktop; iOS shows the fixed sandbox path) · **Rebuild library index** action (runs the [scanning progress](#startup-indexing--artwork)) · **Refresh artwork cache** action (linear progress) · storage-used line.
+5. **Downloads** — download dir as a breadcrumb + Change (Android/desktop; iOS shows the fixed sandbox path) · **Rebuild library index** action (runs the [scanning progress](#startup-indexing--artwork)) · **Refresh artwork cache** action (linear progress) · storage line in mono: `Index 342 files · artwork cache 74 MB of 250 MB`.
 6. **Profiles** — count + switch/manage shortcut ([§ Profiles & account](#profiles--account)).
 7. **Providers** — link row with the enabled count and health dots.
 8. **About & diagnostics** — app/libmpv versions (ffmpeg presence desktop-only) · Export data / Import data (M4) · licenses.
